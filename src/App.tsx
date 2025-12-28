@@ -95,18 +95,23 @@ export default function App() {
   }, [])
 
   const handleExport = useCallback(async () => {
-    if (!video) return
+    if (!video || !metadata) return
 
     setAppState({ type: 'exporting' })
 
     try {
-      await exportVideo(video, points)
+      await exportVideo(video, points, metadata.fps, {
+        startColor: tracerColor,
+        endColor: tracerColor,
+        lineWidth: 4,
+        glowIntensity: 10
+      })
       setAppState({ type: 'complete' })
     } catch (err) {
       console.error('Export failed:', err)
       setAppState({ type: 'editing' })
     }
-  }, [video, points, exportVideo])
+  }, [video, points, metadata, tracerColor, exportVideo])
 
   const handleStartOver = useCallback(() => {
     if (videoUrl) {

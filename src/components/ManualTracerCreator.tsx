@@ -80,17 +80,17 @@ export function ManualTracerCreator({
     for (let i = 0; i <= flightFrames; i++) {
       const frameT = i / flightFrames // 0 to 1 linear with frame count
 
-      // Smooth cubic ease-out-in: fast at start, slow at apex, fast at end
-      // Uses cubic functions that join smoothly (C2 continuous - no hiccup)
+      // Gentle quadratic ease-out-in: fast at start, slow at apex, fast at end
+      // Uses quadratic functions for smoother, less aggressive timing
       let t: number
       if (frameT < 0.5) {
-        // Cubic ease-out: starts fast, slows toward middle
+        // Quadratic ease-out: starts fast, slows toward middle
         const x = frameT * 2
-        t = 0.5 * (1 - Math.pow(1 - x, 3))
+        t = 0.5 * (1 - Math.pow(1 - x, 2))
       } else {
-        // Cubic ease-in: starts slow, speeds up toward end
+        // Quadratic ease-in: starts slow, speeds up toward end
         const x = (frameT - 0.5) * 2
-        t = 0.5 + 0.5 * Math.pow(x, 3)
+        t = 0.5 + 0.5 * Math.pow(x, 2)
       }
 
       // Use quadratic bezier: Start -> Apex (control) -> End
@@ -154,14 +154,14 @@ export function ManualTracerCreator({
       const trajectoryPoints: { x: number; y: number }[] = []
       for (let i = 0; i <= flightFrames; i++) {
         const frameT = i / flightFrames
-        // Smooth cubic ease-out-in
+        // Gentle quadratic ease-out-in
         let t: number
         if (frameT < 0.5) {
           const easeX = frameT * 2
-          t = 0.5 * (1 - Math.pow(1 - easeX, 3))
+          t = 0.5 * (1 - Math.pow(1 - easeX, 2))
         } else {
           const easeX = (frameT - 0.5) * 2
-          t = 0.5 + 0.5 * Math.pow(easeX, 3)
+          t = 0.5 + 0.5 * Math.pow(easeX, 2)
         }
 
         const u = 1 - t

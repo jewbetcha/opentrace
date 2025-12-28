@@ -131,17 +131,16 @@ export function TraceEditor({
     for (let i = 0; i <= numFrames; i++) {
       const frameT = i / numFrames // 0 to 1 linear with frame count
 
-      // Smooth cubic ease-out-in: fast at start, slow at apex, fast at end
-      // Uses cubic functions that join smoothly (C2 continuous - no hiccup)
+      // Gentle quadratic ease-out-in: fast at start, slow at apex, fast at end
       let t: number
       if (frameT < 0.5) {
-        // Cubic ease-out: starts fast, slows toward middle
+        // Quadratic ease-out: starts fast, slows toward middle
         const easeX = frameT * 2
-        t = 0.5 * (1 - Math.pow(1 - easeX, 3))
+        t = 0.5 * (1 - Math.pow(1 - easeX, 2))
       } else {
-        // Cubic ease-in: starts slow, speeds up toward end
+        // Quadratic ease-in: starts slow, speeds up toward end
         const easeX = (frameT - 0.5) * 2
-        t = 0.5 + 0.5 * Math.pow(easeX, 3)
+        t = 0.5 + 0.5 * Math.pow(easeX, 2)
       }
 
       // Cubic bezier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3

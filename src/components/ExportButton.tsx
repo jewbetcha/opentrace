@@ -24,7 +24,7 @@ export function ExportButton({
       <div className="flex flex-col items-center gap-4">
         <a
           href={downloadUrl}
-          download="traced-shot.webm"
+          download="traced-shot.mov"
           className="
             relative px-8 py-4 rounded-2xl
             bg-gradient-to-r from-[#FFD700] to-[#FF4500]
