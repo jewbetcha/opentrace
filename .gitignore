@@ -25,3 +25,6 @@ npm-debug.log*
 
 # ONNX model in public (generated)
 public/models/*.onnx
+
+.playwright-mcp/
+test_files/

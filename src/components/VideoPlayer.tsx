@@ -14,6 +14,7 @@ interface VideoPlayerProps {
   tracerStyle?: TracerStyle
   onFrameChange?: (frame: number) => void
   showStats?: boolean
+  showFullTracer?: boolean
   children?: React.ReactNode
 }
 
@@ -29,6 +30,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   },
   onFrameChange,
   showStats = true,
+  showFullTracer = false,
   children
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -90,7 +92,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       // Clear and draw tracer
       ctx.clearRect(0, 0, canvas.width, canvas.height)
       if (points.length > 0) {
-        drawTracer(ctx, points, frame, tracerStyle)
+        // Show full trajectory only when paused and showFullTracer is enabled (editing mode)
+        // During playback, always animate the tracer with the video
+        const tracerFrame = (showFullTracer && video.paused)
+          ? points[points.length - 1].frameIndex
+          : frame
+        drawTracer(ctx, points, tracerFrame, tracerStyle)
       }
 
       animationRef.current = requestAnimationFrame(render)
@@ -103,7 +110,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [fps, points, tracerStyle, onFrameChange, currentFrame])
+  }, [fps, points, tracerStyle, onFrameChange, currentFrame, showFullTracer])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current

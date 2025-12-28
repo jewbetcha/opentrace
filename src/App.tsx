@@ -24,6 +24,7 @@ export default function App() {
   const [points, setPoints] = useState<TrackPoint[]>([])
   const [currentFrame, setCurrentFrame] = useState(0)
   const [tracerColor, setTracerColor] = useState('#3B82F6')
+  const [tracerSpeed, setTracerSpeed] = useState(1.0)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const videoPlayerRef = useRef<VideoPlayerHandle>(null)
@@ -77,9 +78,10 @@ export default function App() {
     videoPlayerRef.current?.seekToFrame(frame)
   }, [])
 
-  const handleTracerComplete = useCallback((newPoints: TrackPoint[], color: string) => {
+  const handleTracerComplete = useCallback((newPoints: TrackPoint[], color: string, ballSpeed: number) => {
     setPoints(newPoints)
     setTracerColor(color)
+    setTracerSpeed(ballSpeed)
     setAppState({ type: 'editing' })
   }, [])
 
@@ -90,6 +92,7 @@ export default function App() {
   const handleReset = useCallback(() => {
     setAppState({ type: 'creating' })
     setPoints([])
+    setTracerSpeed(1.0)
   }, [])
 
   const handleColorChange = useCallback((color: string) => {
@@ -242,6 +245,7 @@ export default function App() {
               glowIntensity: 10
             }}
             showStats={false}
+            showFullTracer={true}
           >
             <TraceEditor
               points={points}
@@ -249,8 +253,9 @@ export default function App() {
               videoHeight={metadata.height}
               containerWidth={containerSize.width}
               containerHeight={containerSize.height}
-              fps={metadata.fps}
+              totalFrames={metadata.frameCount}
               tracerColor={tracerColor}
+              initialBallSpeed={tracerSpeed}
               onPointsUpdate={handlePointsUpdate}
               onColorChange={handleColorChange}
               onReset={handleReset}

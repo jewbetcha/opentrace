@@ -10,7 +10,7 @@ interface ManualTracerCreatorProps {
   totalFrames: number
   currentFrame: number
   onSeekToFrame?: (frame: number) => void
-  onComplete: (points: TrackPoint[], color: string) => void
+  onComplete: (points: TrackPoint[], color: string, ballSpeed: number) => void
 }
 
 interface TracerParams {
@@ -20,7 +20,7 @@ interface TracerParams {
   endY: number
   peakHeight: number
   curve: number
-  flightFrames: number
+  ballSpeed: number  // 0.5 to 2.0 multiplier (1.0 = normal)
   impactFrame: number
   color: string
 }
@@ -56,7 +56,7 @@ export function ManualTracerCreator({
     endY: 0,
     peakHeight: 0.3,
     curve: 0,
-    flightFrames: Math.min(60, Math.floor(totalFrames * 0.5)),
+    ballSpeed: 1.0,  // 1.0 = normal speed
     impactFrame: 0,
     color: '#3B82F6'
   })
@@ -71,39 +71,58 @@ export function ManualTracerCreator({
     if (!hasPoints && mode !== 'adjust') return []
 
     const points: TrackPoint[] = []
-    const { startX, startY, endX, endY, peakHeight, curve, flightFrames, impactFrame } = params
+    const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, impactFrame } = params
 
-    // Calculate apex - almost directly above start point
-    const apexX = startX + (endX - startX) * 0.08
-    const apexY = startY - peakHeight * videoHeight
+    // Physics-based trajectory
+    const apexHeight = peakHeight * videoHeight
+    const dx = endX - startX
+    const dy = endY - startY
+
+    // Calculate flight time based on physics
+    // Time to apex is affected by ball speed (faster = quicker rise)
+    // Time falling is determined by gravity (constant)
+    // Higher ball speed = faster initial rise, but same gravity on way down
+
+    // Base frames calibrated for natural feel
+    const riseFrames = Math.round((25 / ballSpeed) * Math.sqrt(apexHeight / 100))
+    const fallFrames = Math.round(30 * Math.sqrt(apexHeight / 100))
+    const flightFrames = Math.max(15, Math.min(totalFrames - impactFrame - 1, riseFrames + fallFrames))
+
+    // Calculate what fraction of flight is rising vs falling
+    const riseFraction = riseFrames / (riseFrames + fallFrames)
 
     for (let i = 0; i <= flightFrames; i++) {
-      const frameT = i / flightFrames // 0 to 1 linear with frame count
+      const frameIndex = impactFrame + i
 
-      // Gentle quadratic ease-out-in: fast at start, slow at apex, fast at end
-      // Uses quadratic functions for smoother, less aggressive timing
-      let t: number
-      if (frameT < 0.5) {
-        // Quadratic ease-out: starts fast, slows toward middle
-        const x = frameT * 2
-        t = 0.5 * (1 - Math.pow(1 - x, 2))
-      } else {
-        // Quadratic ease-in: starts slow, speeds up toward end
-        const x = (frameT - 0.5) * 2
-        t = 0.5 + 0.5 * Math.pow(x, 2)
-      }
+      // Stop if we've exceeded the video length
+      if (frameIndex >= totalFrames) break
 
-      // Use quadratic bezier: Start -> Apex (control) -> End
-      const u = 1 - t
-      let x = u * u * startX + 2 * u * t * apexX + t * t * endX
-      let y = u * u * startY + 2 * u * t * apexY + t * t * endY
+      const t = i / flightFrames
 
-      // Add draw/fade curve offset
+      // X: linear motion (constant horizontal velocity)
+      let x = startX + dx * t
+
+      // Y: smooth parabola using Lagrange interpolation
+      // This passes through: (0, startY), (riseFraction, startY-apexHeight), (1, endY)
+      // No kinks because it's a single smooth quadratic
+      const y0 = startY
+      const y1 = startY - apexHeight  // peak
+      const y2 = endY
+      const t1 = riseFraction
+
+      // Lagrange basis polynomials for smooth quadratic through 3 points
+      const L0 = ((t - t1) * (t - 1)) / ((0 - t1) * (0 - 1))
+      const L1 = ((t - 0) * (t - 1)) / ((t1 - 0) * (t1 - 1))
+      const L2 = ((t - 0) * (t - t1)) / ((1 - 0) * (1 - t1))
+
+      let y = y0 * L0 + y1 * L1 + y2 * L2
+
+      // Add draw/fade curve offset (sine curve for side spin effect)
       const curveOffset = Math.sin(t * Math.PI) * curve * videoWidth * 0.2
       x += curveOffset
 
       points.push({
-        frameIndex: impactFrame + i,
+        frameIndex,
         x: Math.max(0, Math.min(videoWidth, x)),
         y: Math.max(0, Math.min(videoHeight, y)),
         confidence: 1,
@@ -112,7 +131,7 @@ export function ManualTracerCreator({
     }
 
     return points
-  }, [params, videoWidth, videoHeight, pointsSet, mode])
+  }, [params, videoWidth, videoHeight, pointsSet, mode, totalFrames])
 
   const previewPoints = generateTrajectory()
 
@@ -144,29 +163,45 @@ export function ManualTracerCreator({
 
     // Draw trajectory when in adjust mode (both points are set)
     if (mode === 'adjust') {
-      const { startX, startY, endX, endY, peakHeight, curve, flightFrames, color } = params
+      const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, color } = params
 
-      // Calculate apex
-      const apexX = startX + (endX - startX) * 0.08
-      const apexY = startY - peakHeight * videoHeight
+      // Physics-based trajectory (same as trajectory generation)
+      const apexHeight = peakHeight * videoHeight
+      const dx = endX - startX
+      const dy = endY - startY
 
-      // Generate trajectory points
+      // Calculate flight time based on physics
+      const riseFrames = Math.round((25 / ballSpeed) * Math.sqrt(apexHeight / 100))
+      const fallFrames = Math.round(30 * Math.sqrt(apexHeight / 100))
+      const flightFrames = Math.max(15, Math.min(totalFrames - params.impactFrame - 1, riseFrames + fallFrames))
+      const riseFraction = riseFrames / (riseFrames + fallFrames)
+
+      // Generate trajectory points using physics
       const trajectoryPoints: { x: number; y: number }[] = []
       for (let i = 0; i <= flightFrames; i++) {
-        const frameT = i / flightFrames
-        // Gentle quadratic ease-out-in
-        let t: number
-        if (frameT < 0.5) {
-          const easeX = frameT * 2
-          t = 0.5 * (1 - Math.pow(1 - easeX, 2))
-        } else {
-          const easeX = (frameT - 0.5) * 2
-          t = 0.5 + 0.5 * Math.pow(easeX, 2)
-        }
+        const frameIndex = params.impactFrame + i
 
-        const u = 1 - t
-        let x = u * u * startX + 2 * u * t * apexX + t * t * endX
-        let y = u * u * startY + 2 * u * t * apexY + t * t * endY
+        // Stop if we've exceeded the video length
+        if (frameIndex >= totalFrames) break
+
+        const t = i / flightFrames
+
+        // X: linear motion
+        let x = startX + dx * t
+
+        // Y: smooth parabola using Lagrange interpolation
+        const y0 = startY
+        const y1 = startY - apexHeight  // peak
+        const y2 = endY
+        const t1 = riseFraction
+
+        const L0 = ((t - t1) * (t - 1)) / ((0 - t1) * (0 - 1))
+        const L1 = ((t - 0) * (t - 1)) / ((t1 - 0) * (t1 - 1))
+        const L2 = ((t - 0) * (t - t1)) / ((1 - 0) * (1 - t1))
+
+        let y = y0 * L0 + y1 * L1 + y2 * L2
+
+        // Add draw/fade curve offset
         const curveOffset = Math.sin(t * Math.PI) * curve * videoWidth * 0.2
         x += curveOffset
 
@@ -286,7 +321,7 @@ export function ManualTracerCreator({
   }
 
   const handleComplete = () => {
-    onComplete(previewPoints, params.color)
+    onComplete(previewPoints, params.color, params.ballSpeed)
   }
 
   return (
@@ -394,11 +429,11 @@ export function ManualTracerCreator({
 
       {/* Adjustment controls - compact layout */}
       {mode === 'adjust' && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black via-black/90 to-transparent pt-6 pb-4 px-4">
+        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm pt-4 pb-4 px-4 border-t border-white/10">
           <div className="max-w-md mx-auto space-y-3">
             {/* Peak Height */}
             <div className="flex items-center gap-3">
-              <label className="text-xs text-neutral-400 w-12 flex-shrink-0">Height</label>
+              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Height</label>
               <input
                 type="range"
                 min="0"
@@ -412,7 +447,7 @@ export function ManualTracerCreator({
 
             {/* Curve */}
             <div className="flex items-center gap-3">
-              <label className="text-xs text-neutral-400 w-12 flex-shrink-0">Curve</label>
+              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Curve</label>
               <input
                 type="range"
                 min="-100"
@@ -427,23 +462,24 @@ export function ManualTracerCreator({
               </span>
             </div>
 
-            {/* Flight Time */}
+            {/* Ball Speed */}
             <div className="flex items-center gap-3">
-              <label className="text-xs text-neutral-400 w-12 flex-shrink-0">Time</label>
+              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Speed</label>
               <input
                 type="range"
-                min="15"
-                max={Math.min(180, totalFrames - params.impactFrame)}
-                value={params.flightFrames}
-                onChange={(e) => setParams(p => ({ ...p, flightFrames: Number(e.target.value) }))}
+                min="0.5"
+                max="2.0"
+                step="0.1"
+                value={params.ballSpeed}
+                onChange={(e) => setParams(p => ({ ...p, ballSpeed: Number(e.target.value) }))}
                 className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">{(params.flightFrames / fps).toFixed(1)}s</span>
+              <span className="text-xs text-white tabular-nums w-10 text-right">{params.ballSpeed.toFixed(1)}x</span>
             </div>
 
             {/* Color picker - inline */}
             <div className="flex items-center gap-3">
-              <span className="text-xs text-neutral-400 w-12 flex-shrink-0">Color</span>
+              <span className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Color</span>
               <div className="flex gap-2 flex-1">
                 {TRACER_COLORS.map((c) => (
                   <button
@@ -478,7 +514,7 @@ export function ManualTracerCreator({
                 className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#FFD700] to-[#FF4500] text-black text-sm font-semibold hover:opacity-90 transition-opacity touch-target"
                 style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
               >
-                Apply Tracer
+                Apply & Edit Curve
               </button>
             </div>
           </div>

@@ -11,7 +11,7 @@ interface ControlPoint {
 interface TracerParams {
   peakHeight: number
   curve: number
-  flightFrames: number
+  ballSpeed: number  // 0.5 to 2.0 multiplier
 }
 
 const TRACER_COLORS = [
@@ -30,8 +30,9 @@ interface TraceEditorProps {
   videoHeight: number
   containerWidth: number
   containerHeight: number
-  fps: number
+  totalFrames: number
   tracerColor: string
+  initialBallSpeed: number
   onPointsUpdate: (points: TrackPoint[]) => void
   onColorChange: (color: string) => void
   onReset: () => void
@@ -44,8 +45,9 @@ export function TraceEditor({
   videoHeight,
   containerWidth,
   containerHeight,
-  fps,
+  totalFrames,
   tracerColor,
+  initialBallSpeed,
   onPointsUpdate,
   onColorChange,
   onReset,
@@ -54,18 +56,17 @@ export function TraceEditor({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [selectedControl, setSelectedControl] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [isEditMode, setIsEditMode] = useState(false)
+  const [isEditMode, setIsEditMode] = useState(true) // Start in edit mode
 
   // Control points for bezier curve
   const [controlPoints, setControlPoints] = useState<ControlPoint[]>([])
 
-  // Params for sliders
+  // Params for sliders - initialize with passed ballSpeed
   const [params, setParams] = useState<TracerParams>(() => {
-    if (points.length < 2) return { peakHeight: 0.3, curve: 0, flightFrames: 60 }
     return {
       peakHeight: 0.3,
       curve: 0,
-      flightFrames: points.length - 1
+      ballSpeed: initialBallSpeed
     }
   })
 
@@ -118,53 +119,65 @@ export function TraceEditor({
     ])
   }, [points])
 
-  // Regenerate trajectory from control points using cubic bezier
-  const regenerateFromControlPoints = useCallback((controls: ControlPoint[], numFrames: number) => {
+  // Regenerate trajectory from control points using cubic Bezier with physics timing
+  const regenerateFromControlPoints = useCallback((controls: ControlPoint[], ballSpeed: number) => {
     if (controls.length < 3) return
 
     const controlUp = controls.find(c => c.id === 'controlUp')!
     const controlDown = controls.find(c => c.id === 'controlDown')!
     const endPoint = controls.find(c => c.id === 'end')!
 
+    // Calculate apex height from control point for physics timing
+    const apexHeight = Math.max(50, Math.abs(startPos.y - Math.min(controlUp.y, controlDown.y)))
+
+    // Calculate flight time based on physics
+    // Ball speed affects rise time, gravity affects fall time
+    const riseFrames = Math.round((25 / ballSpeed) * Math.sqrt(apexHeight / 100))
+    const fallFrames = Math.round(30 * Math.sqrt(apexHeight / 100))
+    const calculatedFrames = riseFrames + fallFrames
+
+    // Limit to available video frames
+    const maxFrames = totalFrames - impactFrame - 1
+    const numFrames = Math.max(15, Math.min(calculatedFrames, maxFrames))
+
     const newPoints: TrackPoint[] = []
 
     for (let i = 0; i <= numFrames; i++) {
-      const frameT = i / numFrames // 0 to 1 linear with frame count
+      const frameIndex = impactFrame + i
 
-      // Gentle quadratic ease-out-in: fast at start, slow at apex, fast at end
-      let t: number
-      if (frameT < 0.5) {
-        // Quadratic ease-out: starts fast, slows toward middle
-        const easeX = frameT * 2
-        t = 0.5 * (1 - Math.pow(1 - easeX, 2))
-      } else {
-        // Quadratic ease-in: starts slow, speeds up toward end
-        const easeX = (frameT - 0.5) * 2
-        t = 0.5 + 0.5 * Math.pow(easeX, 2)
-      }
+      // Stop if we've exceeded the video length
+      if (frameIndex >= totalFrames) break
+
+      // Linear time for Bezier curve - the curve shape handles the physics feel
+      const t = i / calculatedFrames // Use calculated frames for proper curve progression
 
       // Cubic bezier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
       const u = 1 - t
-      const bx = u*u*u * startPos.x +
-                3*u*u*t * controlUp.x +
-                3*u*t*t * controlDown.x +
-                t*t*t * endPoint.x
-      const by = u*u*u * startPos.y +
-                3*u*u*t * controlUp.y +
-                3*u*t*t * controlDown.y +
-                t*t*t * endPoint.y
+      const u2 = u * u
+      const u3 = u2 * u
+      const t2 = t * t
+      const t3 = t2 * t
+
+      const x = u3 * startPos.x +
+                3 * u2 * t * controlUp.x +
+                3 * u * t2 * controlDown.x +
+                t3 * endPoint.x
+      const y = u3 * startPos.y +
+                3 * u2 * t * controlUp.y +
+                3 * u * t2 * controlDown.y +
+                t3 * endPoint.y
 
       newPoints.push({
-        frameIndex: impactFrame + i,
-        x: Math.max(0, Math.min(videoWidth, bx)),
-        y: Math.max(0, Math.min(videoHeight, by)),
+        frameIndex,
+        x: Math.max(0, Math.min(videoWidth, x)),
+        y: Math.max(0, Math.min(videoHeight, y)),
         confidence: 1,
         isEstimated: false
       })
     }
 
     onPointsUpdate(newPoints)
-  }, [startPos, impactFrame, videoWidth, videoHeight, onPointsUpdate])
+  }, [startPos, impactFrame, videoWidth, videoHeight, totalFrames, onPointsUpdate])
 
   // Handle slider changes - apply relative adjustments to preserve manual edits
   const handleParamChange = useCallback((key: keyof TracerParams, value: number) => {
@@ -199,10 +212,10 @@ export function TraceEditor({
         }
       })
     }
-    // For flightFrames, just regenerate with same control points
+    // For ballSpeed, just regenerate with same control points (physics recalculates frames)
 
     setControlPoints(newControls)
-    regenerateFromControlPoints(newControls, newParams.flightFrames)
+    regenerateFromControlPoints(newControls, newParams.ballSpeed)
   }, [params, controlPoints, videoWidth, videoHeight, regenerateFromControlPoints])
 
   const HIT_RADIUS = 40
@@ -272,10 +285,10 @@ export function TraceEditor({
       const updated = prev.map(cp =>
         cp.id === selectedControl ? { ...cp, x: clampedX, y: clampedY } : cp
       )
-      regenerateFromControlPoints(updated, params.flightFrames)
+      regenerateFromControlPoints(updated, params.ballSpeed)
       return updated
     })
-  }, [isDragging, selectedControl, toVideoCoords, videoWidth, videoHeight, params.flightFrames, regenerateFromControlPoints])
+  }, [isDragging, selectedControl, toVideoCoords, videoWidth, videoHeight, params.ballSpeed, regenerateFromControlPoints])
 
   const handleEnd = useCallback(() => {
     setIsDragging(false)
@@ -404,12 +417,12 @@ export function TraceEditor({
       <button
         onClick={() => setIsEditMode(!isEditMode)}
         className={`
-          absolute top-4 right-4 z-20 px-4 py-2.5 rounded-full
+          absolute top-4 right-4 z-20 px-5 py-3 rounded-full
           flex items-center gap-2 touch-target
-          transition-all duration-300 backdrop-blur-sm
+          transition-all duration-300
           ${isEditMode
             ? 'bg-[#FFD700] text-black shadow-lg shadow-[#FFD700]/30'
-            : 'bg-white/10 text-white hover:bg-white/20'
+            : 'bg-gradient-to-r from-[#FFD700] to-[#FF4500] text-black shadow-lg shadow-black/30'
           }
         `}
         style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
@@ -417,8 +430,8 @@ export function TraceEditor({
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
         </svg>
-        <span className="text-sm font-medium">
-          {isEditMode ? 'Editing' : 'Edit Path'}
+        <span className="text-sm font-semibold">
+          {isEditMode ? 'Editing' : 'Edit'}
         </span>
       </button>
 
@@ -436,16 +449,16 @@ export function TraceEditor({
 
       {/* Edit mode controls panel - compact */}
       {isEditMode && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black via-black/90 to-transparent pt-6 pb-4 px-4">
+        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm pt-4 pb-4 px-4 border-t border-white/10">
           <div className="max-w-md mx-auto space-y-3">
             {/* Hint */}
-            <p className="text-xs text-center text-neutral-500" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
+            <p className="text-xs text-center text-white/60" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
               Drag control points to adjust curve
             </p>
 
             {/* Peak Height */}
             <div className="flex items-center gap-3">
-              <label className="text-xs text-neutral-400 w-12 flex-shrink-0">Height</label>
+              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Height</label>
               <input
                 type="range"
                 min="5"
@@ -459,7 +472,7 @@ export function TraceEditor({
 
             {/* Curve (Draw/Fade) */}
             <div className="flex items-center gap-3">
-              <label className="text-xs text-neutral-400 w-12 flex-shrink-0">Curve</label>
+              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Curve</label>
               <input
                 type="range"
                 min="-100"
@@ -474,23 +487,24 @@ export function TraceEditor({
               </span>
             </div>
 
-            {/* Flight Time / Speed */}
+            {/* Ball Speed */}
             <div className="flex items-center gap-3">
-              <label className="text-xs text-neutral-400 w-12 flex-shrink-0">Time</label>
+              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Speed</label>
               <input
                 type="range"
-                min="15"
-                max="180"
-                value={params.flightFrames}
-                onChange={(e) => handleParamChange('flightFrames', Number(e.target.value))}
+                min="0.5"
+                max="2.0"
+                step="0.1"
+                value={params.ballSpeed}
+                onChange={(e) => handleParamChange('ballSpeed', Number(e.target.value))}
                 className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">{(params.flightFrames / fps).toFixed(1)}s</span>
+              <span className="text-xs text-white tabular-nums w-10 text-right">{params.ballSpeed.toFixed(1)}x</span>
             </div>
 
             {/* Color picker - inline */}
             <div className="flex items-center gap-3">
-              <span className="text-xs text-neutral-400 w-12 flex-shrink-0">Color</span>
+              <span className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Color</span>
               <div className="flex gap-2 flex-1">
                 {TRACER_COLORS.map((c) => (
                   <button
