@@ -6,14 +6,14 @@ import type { TrackPoint, TracerStyle } from '../types'
 interface UseVideoExportReturn {
   isExporting: boolean
   progress: number
-  exportedUrl: string | null
   error: Error | null
   exportVideo: (
+    videoFile: File,
     video: HTMLVideoElement,
     points: TrackPoint[],
     fps: number,
     style?: TracerStyle
-  ) => Promise<string>
+  ) => Promise<void>
   cancelExport: () => void
 }
 
@@ -30,14 +30,19 @@ async function getFFmpeg(): Promise<FFmpeg> {
   return ffmpeg
 }
 
+// Check if WebCodecs is available
+function hasWebCodecs(): boolean {
+  return typeof VideoDecoder !== 'undefined' && typeof VideoFrame !== 'undefined'
+}
+
 export function useVideoExport(): UseVideoExportReturn {
   const [isExporting, setIsExporting] = useState(false)
   const [progress, setProgress] = useState(0)
-  const [exportedUrl, setExportedUrl] = useState<string | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const abortRef = useRef(false)
 
   const exportVideo = useCallback(async (
+    videoFile: File,
     video: HTMLVideoElement,
     points: TrackPoint[],
     fps: number,
@@ -47,7 +52,7 @@ export function useVideoExport(): UseVideoExportReturn {
       lineWidth: 4,
       glowIntensity: 10
     }
-  ): Promise<string> => {
+  ): Promise<void> => {
     setIsExporting(true)
     setProgress(0)
     setError(null)
@@ -56,59 +61,55 @@ export function useVideoExport(): UseVideoExportReturn {
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')!
+    const ctx = canvas.getContext('2d', { alpha: false })!
 
     const duration = video.duration
     const totalFrames = Math.floor(duration * fps)
 
     try {
       // Load FFmpeg
-      setProgress(0.01)
+      setProgress(0.02)
       const ff = await getFFmpeg()
 
-      // Set up progress handler
       ff.on('progress', ({ progress: p }) => {
-        // FFmpeg progress is for the encoding phase (last 20%)
-        setProgress(0.8 + p * 0.2)
+        setProgress(0.85 + p * 0.15)
       })
 
-      // Render frames
-      for (let frame = 0; frame < totalFrames; frame++) {
-        if (abortRef.current) {
-          throw new Error('Export cancelled')
+      let frames: Uint8Array[] = []
+
+      // Try WebCodecs for frame-accurate extraction
+      if (hasWebCodecs()) {
+        try {
+          frames = await extractFramesWebCodecs(videoFile, canvas, ctx, points, fps, totalFrames, style, setProgress, abortRef)
+        } catch (e) {
+          console.warn('WebCodecs failed, falling back to video element:', e)
+          frames = await extractFramesFallback(video, canvas, ctx, points, fps, totalFrames, style, setProgress, abortRef)
         }
-
-        const time = frame / fps
-        await seekVideo(video, time)
-
-        // Draw video frame
-        ctx.drawImage(video, 0, 0)
-
-        // Draw tracer overlay
-        drawTracer(ctx, points, frame, style)
-
-        // Convert canvas to PNG blob
-        const blob = await new Promise<Blob>((resolve) => {
-          canvas.toBlob((b) => resolve(b!), 'image/png')
-        })
-
-        const arrayBuffer = await blob.arrayBuffer()
-        const frameData = new Uint8Array(arrayBuffer)
-
-        // Write frame to FFmpeg filesystem
-        const frameName = `frame${frame.toString().padStart(6, '0')}.png`
-        await ff.writeFile(frameName, frameData)
-
-        setProgress((frame + 1) / totalFrames * 0.8)
+      } else {
+        frames = await extractFramesFallback(video, canvas, ctx, points, fps, totalFrames, style, setProgress, abortRef)
       }
 
-      // Encode to MOV using FFmpeg
+      if (abortRef.current) {
+        throw new Error('Export cancelled')
+      }
+
+      // Write all frames to FFmpeg filesystem
+      for (let i = 0; i < frames.length; i++) {
+        const frameName = `frame${i.toString().padStart(6, '0')}.jpg`
+        await ff.writeFile(frameName, frames[i])
+      }
+      setProgress(0.82)
+
+      // Encode to MOV using FFmpeg with high quality settings
       await ff.exec([
         '-framerate', fps.toString(),
-        '-i', 'frame%06d.png',
+        '-i', 'frame%06d.jpg',
         '-c:v', 'libx264',
+        '-preset', 'slow',
+        '-crf', '18',
         '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
+        '-r', fps.toString(),
         '-y',
         'output.mov'
       ])
@@ -117,18 +118,27 @@ export function useVideoExport(): UseVideoExportReturn {
       const data = await ff.readFile('output.mov')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const outputBlob = new Blob([data as any], { type: 'video/quicktime' })
-      const url = URL.createObjectURL(outputBlob)
 
       // Clean up frames
-      for (let frame = 0; frame < totalFrames; frame++) {
-        const frameName = `frame${frame.toString().padStart(6, '0')}.png`
+      for (let i = 0; i < frames.length; i++) {
+        const frameName = `frame${i.toString().padStart(6, '0')}.jpg`
         await ff.deleteFile(frameName)
       }
       await ff.deleteFile('output.mov')
 
-      setExportedUrl(url)
+      // Auto-download the file
+      const url = URL.createObjectURL(outputBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'traced-shot.mov'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+
+      // Clean up URL after a delay
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+
       setProgress(1)
-      return url
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Export failed')
       setError(error)
@@ -145,26 +155,122 @@ export function useVideoExport(): UseVideoExportReturn {
   return {
     isExporting,
     progress,
-    exportedUrl,
     error,
     exportVideo,
     cancelExport
   }
 }
 
-async function seekVideo(video: HTMLVideoElement, time: number): Promise<void> {
-  return new Promise((resolve) => {
-    // If already at the right time, resolve immediately
-    if (Math.abs(video.currentTime - time) < 0.001) {
-      resolve()
-      return
+// WebCodecs-based frame extraction (frame-accurate)
+async function extractFramesWebCodecs(
+  videoFile: File,
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  points: TrackPoint[],
+  fps: number,
+  totalFrames: number,
+  style: TracerStyle,
+  setProgress: (p: number) => void,
+  abortRef: React.MutableRefObject<boolean>
+): Promise<Uint8Array[]> {
+  const frames: Uint8Array[] = []
+
+  // Create a video element for frame extraction
+  const arrayBuffer = await videoFile.arrayBuffer()
+  const videoBlob = new Blob([arrayBuffer], { type: videoFile.type })
+  const videoUrl = URL.createObjectURL(videoBlob)
+
+  const tempVideo = document.createElement('video')
+  tempVideo.src = videoUrl
+  tempVideo.muted = true
+  tempVideo.preload = 'auto'
+
+  await new Promise<void>((resolve) => {
+    tempVideo.onloadeddata = () => resolve()
+    tempVideo.load()
+  })
+
+  // Extract frames using VideoFrame for accurate capture
+  for (let frame = 0; frame < totalFrames; frame++) {
+    if (abortRef.current) break
+
+    const targetTime = frame / fps
+    tempVideo.currentTime = targetTime
+
+    await new Promise<void>((resolve) => {
+      tempVideo.onseeked = () => resolve()
+    })
+
+    // Use VideoFrame for accurate capture
+    try {
+      const videoFrame = new VideoFrame(tempVideo, { timestamp: targetTime * 1000000 })
+      ctx.drawImage(videoFrame, 0, 0)
+      videoFrame.close()
+    } catch {
+      // Fallback to direct draw
+      ctx.drawImage(tempVideo, 0, 0)
     }
 
-    const onSeeked = () => {
-      video.removeEventListener('seeked', onSeeked)
-      resolve()
-    }
-    video.addEventListener('seeked', onSeeked)
-    video.currentTime = time
+    drawTracer(ctx, points, frame, style)
+
+    const blob = await new Promise<Blob>((resolve) => {
+      canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
+    })
+    frames.push(new Uint8Array(await blob.arrayBuffer()))
+
+    setProgress((frame + 1) / totalFrames * 0.8)
+  }
+
+  URL.revokeObjectURL(videoUrl)
+  return frames
+}
+
+// Fallback extraction using video element
+async function extractFramesFallback(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  points: TrackPoint[],
+  fps: number,
+  totalFrames: number,
+  style: TracerStyle,
+  setProgress: (p: number) => void,
+  abortRef: React.MutableRefObject<boolean>
+): Promise<Uint8Array[]> {
+  const frames: Uint8Array[] = []
+
+  video.pause()
+  video.currentTime = 0
+
+  await new Promise<void>((resolve) => {
+    video.onseeked = () => resolve()
   })
+
+  for (let frame = 0; frame < totalFrames; frame++) {
+    if (abortRef.current) break
+
+    const targetTime = frame / fps
+    video.currentTime = targetTime
+
+    await new Promise<void>((resolve) => {
+      video.onseeked = () => {
+        // Extra frame to ensure rendering
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve())
+        })
+      }
+    })
+
+    ctx.drawImage(video, 0, 0)
+    drawTracer(ctx, points, frame, style)
+
+    const blob = await new Promise<Blob>((resolve) => {
+      canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
+    })
+    frames.push(new Uint8Array(await blob.arrayBuffer()))
+
+    setProgress((frame + 1) / totalFrames * 0.8)
+  }
+
+  return frames
 }

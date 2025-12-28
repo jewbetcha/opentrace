@@ -4,7 +4,6 @@ interface ExportButtonProps {
   onExport: () => Promise<void>
   isExporting: boolean
   progress: number
-  downloadUrl: string | null
   onCancel: () => void
 }
 
@@ -12,43 +11,11 @@ export function ExportButton({
   onExport,
   isExporting,
   progress,
-  downloadUrl,
   onCancel
 }: ExportButtonProps) {
   const [isHovered, setIsHovered] = useState(false)
 
   const percentage = Math.round(progress * 100)
-
-  if (downloadUrl) {
-    return (
-      <div className="flex flex-col items-center gap-4">
-        <a
-          href={downloadUrl}
-          download="traced-shot.mov"
-          className="
-            relative px-8 py-4 rounded-2xl
-            bg-gradient-to-r from-[#FFD700] to-[#FF4500]
-            text-black font-semibold text-lg
-            flex items-center gap-3
-            shadow-lg shadow-[#FFD700]/30
-            hover:shadow-xl hover:shadow-[#FFD700]/40
-            active:scale-95 transition-all duration-300
-            touch-target
-          "
-          style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
-        >
-          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-          Download Video
-        </a>
-
-        <p className="text-sm text-neutral-500">
-          Your traced video is ready
-        </p>
-      </div>
-    )
-  }
 
   if (isExporting) {
     return (
@@ -99,7 +66,7 @@ export function ExportButton({
             className="text-white font-medium mb-1"
             style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
           >
-            Rendering video...
+            {percentage < 80 ? 'Extracting frames...' : 'Encoding video...'}
           </p>
           <p className="text-sm text-neutral-500">
             This may take a moment
@@ -144,9 +111,9 @@ export function ExportButton({
       />
 
       <svg className="w-6 h-6 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
       </svg>
-      <span className="relative z-10">Export Video</span>
+      <span className="relative z-10">Export & Download</span>
     </button>
   )
 }

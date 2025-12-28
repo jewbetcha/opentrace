@@ -19,6 +19,7 @@ type AppState =
 export default function App() {
   const [appState, setAppState] = useState<AppState>({ type: 'idle' })
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [videoFile, setVideoFile] = useState<File | null>(null)
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null)
   const [points, setPoints] = useState<TrackPoint[]>([])
   const [currentFrame, setCurrentFrame] = useState(0)
@@ -29,7 +30,7 @@ export default function App() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
 
   const { video, metadata: videoMeta, loadVideoFile } = useVideoFrames()
-  const { exportVideo, isExporting, progress: exportProgress, exportedUrl, cancelExport } = useVideoExport()
+  const { exportVideo, isExporting, progress: exportProgress, cancelExport } = useVideoExport()
 
   // Update container size
   useEffect(() => {
@@ -56,6 +57,7 @@ export default function App() {
 
   const handleUpload = useCallback(async (file: File) => {
     setVideoUrl(URL.createObjectURL(file))
+    setVideoFile(file)
     setAppState({ type: 'loading' })
 
     try {
@@ -95,29 +97,31 @@ export default function App() {
   }, [])
 
   const handleExport = useCallback(async () => {
-    if (!video || !metadata) return
+    if (!video || !metadata || !videoFile) return
 
     setAppState({ type: 'exporting' })
 
     try {
-      await exportVideo(video, points, metadata.fps, {
+      await exportVideo(videoFile, video, points, metadata.fps, {
         startColor: tracerColor,
         endColor: tracerColor,
         lineWidth: 4,
         glowIntensity: 10
       })
-      setAppState({ type: 'complete' })
+      // Auto-download happens in exportVideo, go back to editing
+      setAppState({ type: 'editing' })
     } catch (err) {
       console.error('Export failed:', err)
       setAppState({ type: 'editing' })
     }
-  }, [video, points, metadata, tracerColor, exportVideo])
+  }, [video, videoFile, points, metadata, tracerColor, exportVideo])
 
   const handleStartOver = useCallback(() => {
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl)
     }
     setVideoUrl(null)
+    setVideoFile(null)
     setMetadata(null)
     setPoints([])
     setCurrentFrame(0)
@@ -262,7 +266,6 @@ export default function App() {
               onExport={handleExport}
               isExporting={isExporting}
               progress={exportProgress}
-              downloadUrl={exportedUrl}
               onCancel={cancelExport}
             />
           </div>
