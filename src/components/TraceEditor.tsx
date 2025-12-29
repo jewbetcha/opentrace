@@ -106,20 +106,20 @@ export function TraceEditor({
 
     // Control point on way up (between start and peak)
     const upIdx = Math.floor(peakIdx * 0.5)
-    const upPoint = points[upIdx] || points[Math.floor(points.length * 0.2)]
+    const upPoint = points[upIdx] || points[Math.floor(points.length * 0.25)]
 
     // Control point on way down (between peak and end)
     const downIdx = peakIdx + Math.floor((points.length - 1 - peakIdx) * 0.5)
-    const downPoint = points[downIdx] || points[Math.floor(points.length * 0.7)]
+    const downPoint = points[downIdx] || points[Math.floor(points.length * 0.75)]
 
     setControlPoints([
-      { id: 'controlUp', x: upPoint.x, y: upPoint.y, label: 'Curve Up' },
-      { id: 'controlDown', x: downPoint.x, y: downPoint.y, label: 'Curve Down' },
+      { id: 'controlUp', x: upPoint.x, y: upPoint.y, label: 'Rise' },
+      { id: 'controlDown', x: downPoint.x, y: downPoint.y, label: 'Fall' },
       { id: 'end', x: endPoint.x, y: endPoint.y, label: 'Landing' }
     ])
   }, [points])
 
-  // Regenerate trajectory from control points using cubic Bezier with physics timing
+  // Regenerate trajectory from control points using cubic Bezier for shape, physics for timing
   const regenerateFromControlPoints = useCallback((controls: ControlPoint[], ballSpeed: number) => {
     if (controls.length < 3) return
 
@@ -127,45 +127,72 @@ export function TraceEditor({
     const controlDown = controls.find(c => c.id === 'controlDown')!
     const endPoint = controls.find(c => c.id === 'end')!
 
-    // Calculate apex height from control point for physics timing
-    const apexHeight = Math.max(50, Math.abs(startPos.y - Math.min(controlUp.y, controlDown.y)))
+    // Calculate apex height from control points for physics timing
+    const apexY = Math.min(controlUp.y, controlDown.y)
+    const rise = Math.max(10, startPos.y - apexY)
+    const fall = Math.max(10, endPoint.y - apexY)
 
-    // Calculate flight time based on physics
-    // Ball speed affects rise time, gravity affects fall time
-    const riseFrames = Math.round((25 / ballSpeed) * Math.sqrt(apexHeight / 100))
-    const fallFrames = Math.round(30 * Math.sqrt(apexHeight / 100))
-    const calculatedFrames = riseFrames + fallFrames
+    // PHYSICS-BASED FRAME CALCULATION
+    // Ball speed affects RISE phase (faster ball = fewer frames to apex)
+    // Fall is purely gravity (constant, determined by fall height)
+    const BASE_RISE_FRAMES = 60
+    const GRAVITY_SCALE = 15  // Reduced so fall doesn't dominate
 
-    // Limit to available video frames
+    // Speed affects rise, fall is constant gravity
+    const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(rise / 100)))
+    const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
+
+    const totalFlightFrames = riseFrames + fallFrames
     const maxFrames = totalFrames - impactFrame - 1
-    const numFrames = Math.max(15, Math.min(calculatedFrames, maxFrames))
+    const flightFrames = Math.min(totalFlightFrames, maxFrames)
+
+    console.log(`[TraceEditor] ballSpeed=${ballSpeed}, riseFrames=${riseFrames}, fallFrames=${fallFrames}, flightFrames=${flightFrames}, lastFrame=${impactFrame + flightFrames}`)
 
     const newPoints: TrackPoint[] = []
 
-    for (let i = 0; i <= numFrames; i++) {
-      const frameIndex = impactFrame + i
+    // Total frames for the animation
+    const totalAnimFrames = riseFrames + fallFrames
+    const apexT = riseFrames / totalAnimFrames  // When apex occurs (0-1)
 
-      // Stop if we've exceeded the video length
+    console.log(`[TraceEditor] ballSpeed=${ballSpeed}, riseFrames=${riseFrames}, fallFrames=${fallFrames}, apexT=${apexT.toFixed(2)}`)
+
+    for (let i = 0; i <= flightFrames; i++) {
+      const frameIndex = impactFrame + i
       if (frameIndex >= totalFrames) break
 
-      // Linear time for Bezier curve - the curve shape handles the physics feel
-      const t = i / calculatedFrames // Use calculated frames for proper curve progression
+      // Frame-based timing: which phase are we in?
+      const frameT = i / flightFrames
 
-      // Cubic bezier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
-      const u = 1 - t
+      // Map frame time to curve position
+      // Rise phase: frames 0 to riseFrames map to curve t = 0 to apexT
+      // Fall phase: frames riseFrames to total map to curve t = apexT to 1
+      let curveT: number
+      if (i <= riseFrames) {
+        // Rising - speed already affects riseFrames count
+        curveT = (i / riseFrames) * apexT
+      } else {
+        // Falling - constant gravity timing
+        const fallProgress = (i - riseFrames) / fallFrames
+        curveT = apexT + fallProgress * (1 - apexT)
+      }
+      curveT = Math.min(1, Math.max(0, curveT))
+
+      // Cubic Bezier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
+      const u = 1 - curveT
       const u2 = u * u
       const u3 = u2 * u
-      const t2 = t * t
-      const t3 = t2 * t
+      const ct2 = curveT * curveT
+      const ct3 = ct2 * curveT
 
       const x = u3 * startPos.x +
-                3 * u2 * t * controlUp.x +
-                3 * u * t2 * controlDown.x +
-                t3 * endPoint.x
+                3 * u2 * curveT * controlUp.x +
+                3 * u * ct2 * controlDown.x +
+                ct3 * endPoint.x
+
       const y = u3 * startPos.y +
-                3 * u2 * t * controlUp.y +
-                3 * u * t2 * controlDown.y +
-                t3 * endPoint.y
+                3 * u2 * curveT * controlUp.y +
+                3 * u * ct2 * controlDown.y +
+                ct3 * endPoint.y
 
       newPoints.push({
         frameIndex,
@@ -176,11 +203,13 @@ export function TraceEditor({
       })
     }
 
+    console.log(`[TraceEditor] Generated ${newPoints.length} points, frames ${newPoints[0]?.frameIndex} to ${newPoints[newPoints.length-1]?.frameIndex}`)
     onPointsUpdate(newPoints)
   }, [startPos, impactFrame, videoWidth, videoHeight, totalFrames, onPointsUpdate])
 
   // Handle slider changes - apply relative adjustments to preserve manual edits
   const handleParamChange = useCallback((key: keyof TracerParams, value: number) => {
+    console.log(`[TraceEditor] handleParamChange: ${key} = ${value}`)
     const oldParams = params
     const newParams = { ...params, [key]: value }
     setParams(newParams)
@@ -195,7 +224,7 @@ export function TraceEditor({
       newControls = controlPoints.map(cp => {
         if (cp.id === 'end') return cp // Don't move landing point vertically
         // Move control points up/down based on height change
-        const factor = cp.id === 'controlUp' ? 0.7 : 0.5
+        const factor = cp.id === 'controlUp' ? 0.8 : 0.6
         return {
           ...cp,
           y: Math.max(0, Math.min(videoHeight, cp.y - heightDelta * factor))
@@ -333,7 +362,7 @@ export function TraceEditor({
     if (!isEditMode || !enabled || controlPoints.length === 0) return
 
     // Draw bezier curve guide lines
-    if (points.length > 0) {
+    if (points.length > 0 && controlPoints.length >= 3) {
       const startCanvas = toCanvasCoords(startPos.x, startPos.y)
       const controlUpCanvas = toCanvasCoords(controlPoints[0].x, controlPoints[0].y)
       const controlDownCanvas = toCanvasCoords(controlPoints[1].x, controlPoints[1].y)
@@ -353,7 +382,7 @@ export function TraceEditor({
     }
 
     // Draw control points
-    controlPoints.forEach((cp, idx) => {
+    controlPoints.forEach((cp) => {
       const { x, y } = toCanvasCoords(cp.x, cp.y)
       const isSelected = cp.id === selectedControl
       const radius = isSelected ? 20 : 16
@@ -368,7 +397,7 @@ export function TraceEditor({
       ctx.beginPath()
       ctx.arc(x, y, radius, 0, Math.PI * 2)
 
-      if (idx === 2) {
+      if (cp.id === 'end') {
         // End point - orange
         ctx.fillStyle = isSelected ? '#FF4500' : 'rgba(255, 69, 0, 0.9)'
       } else {
@@ -493,8 +522,8 @@ export function TraceEditor({
               <input
                 type="range"
                 min="0.5"
-                max="2.0"
-                step="0.1"
+                max="10"
+                step="0.5"
                 value={params.ballSpeed}
                 onChange={(e) => handleParamChange('ballSpeed', Number(e.target.value))}
                 className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"

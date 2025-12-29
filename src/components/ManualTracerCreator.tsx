@@ -66,56 +66,64 @@ export function ManualTracerCreator({
 
   const generateTrajectory = useCallback((): TrackPoint[] => {
     // Show trajectory preview when both points are set
-    // Either by mode (adjust mode requires both) or by explicit tracking
     const hasPoints = pointsSet.start && pointsSet.end
     if (!hasPoints && mode !== 'adjust') return []
 
     const points: TrackPoint[] = []
     const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, impactFrame } = params
 
-    // Physics-based trajectory
-    const apexHeight = peakHeight * videoHeight
-    const dx = endX - startX
-    const dy = endY - startY
+    // Calculate apex position (peak of trajectory)
+    const apexY = startY - peakHeight * videoHeight  // Screen coords: up is negative Y
 
-    // Calculate flight time based on physics
-    // Time to apex is affected by ball speed (faster = quicker rise)
-    // Time falling is determined by gravity (constant)
-    // Higher ball speed = faster initial rise, but same gravity on way down
+    // Heights for physics calculations (in screen coords, positive values)
+    const rise = startY - apexY  // Height from start to apex
+    const fall = endY - apexY    // Height from apex to end
 
-    // Base frames calibrated for natural feel
-    const riseFrames = Math.round((25 / ballSpeed) * Math.sqrt(apexHeight / 100))
-    const fallFrames = Math.round(30 * Math.sqrt(apexHeight / 100))
-    const flightFrames = Math.max(15, Math.min(totalFrames - impactFrame - 1, riseFrames + fallFrames))
+    // PHYSICS-BASED FRAME CALCULATION
+    // Ball speed affects RISE phase (faster ball = fewer frames to reach apex)
+    // Fall is purely gravity (constant, determined by fall height)
+    const BASE_RISE_FRAMES = 60
+    const GRAVITY_SCALE = 15  // Reduced so fall doesn't dominate
 
-    // Calculate what fraction of flight is rising vs falling
-    const riseFraction = riseFrames / (riseFrames + fallFrames)
+    // Speed affects rise, fall is constant gravity
+    const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(Math.max(10, rise) / 100)))
+    const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(Math.max(10, fall) / 100)))
 
+    const totalFlightFrames = riseFrames + fallFrames
+    const maxFrames = totalFrames - impactFrame - 1
+    const flightFrames = Math.min(totalFlightFrames, maxFrames)
+
+    // Apex position in normalized time
+    const apexT = riseFrames / totalFlightFrames
+
+    // Generate trajectory points
     for (let i = 0; i <= flightFrames; i++) {
       const frameIndex = impactFrame + i
-
-      // Stop if we've exceeded the video length
       if (frameIndex >= totalFrames) break
 
-      const t = i / flightFrames
+      // Map frame time to curve position
+      // Rise phase: frames 0 to riseFrames map to curve t = 0 to apexT
+      // Fall phase: frames riseFrames to total map to curve t = apexT to 1
+      let t: number
+      if (i <= riseFrames) {
+        // Rising - speed already affects riseFrames count
+        t = (i / riseFrames) * apexT
+      } else {
+        // Falling - constant gravity timing
+        const fallProgress = (i - riseFrames) / fallFrames
+        t = apexT + fallProgress * (1 - apexT)
+      }
+      t = Math.min(1, Math.max(0, t))
 
-      // X: linear motion (constant horizontal velocity)
-      let x = startX + dx * t
+      // X: Linear motion (constant horizontal velocity throughout flight)
+      let x = startX + (endX - startX) * t
 
-      // Y: smooth parabola using Lagrange interpolation
-      // This passes through: (0, startY), (riseFraction, startY-apexHeight), (1, endY)
-      // No kinks because it's a single smooth quadratic
-      const y0 = startY
-      const y1 = startY - apexHeight  // peak
-      const y2 = endY
-      const t1 = riseFraction
-
-      // Lagrange basis polynomials for smooth quadratic through 3 points
-      const L0 = ((t - t1) * (t - 1)) / ((0 - t1) * (0 - 1))
-      const L1 = ((t - 0) * (t - 1)) / ((t1 - 0) * (t1 - 1))
-      const L2 = ((t - 0) * (t - t1)) / ((1 - 0) * (1 - t1))
-
-      let y = y0 * L0 + y1 * L1 + y2 * L2
+      // Y: Quadratic parabola through start, apex, end
+      const dy = endY - startY
+      const A = (-rise - dy * apexT) / (apexT * (apexT - 1))
+      const B = dy - A
+      const C = startY
+      let y = A * t * t + B * t + C
 
       // Add draw/fade curve offset (sine curve for side spin effect)
       const curveOffset = Math.sin(t * Math.PI) * curve * videoWidth * 0.2
@@ -165,43 +173,39 @@ export function ManualTracerCreator({
     if (mode === 'adjust') {
       const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, color } = params
 
-      // Physics-based trajectory (same as trajectory generation)
-      const apexHeight = peakHeight * videoHeight
-      const dx = endX - startX
+      // Calculate apex position (same as generateTrajectory)
+      const apexY = startY - peakHeight * videoHeight
+      const rise = startY - apexY
+      const fall = endY - apexY
+
+      // Physics-based frame calculation (same as generateTrajectory)
+      const BASE_RISE_FRAMES = 60
+      const GRAVITY_SCALE = 15
+      const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(Math.max(10, rise) / 100)))
+      const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(Math.max(10, fall) / 100)))
+      const totalFlightFrames = riseFrames + fallFrames
+      const maxFrames = totalFrames - params.impactFrame - 1
+      const flightFrames = Math.min(totalFlightFrames, maxFrames)
+
+      // Pre-calculate parabola coefficients
+      const apexT = riseFrames / totalFlightFrames
       const dy = endY - startY
+      const A = (-rise - dy * apexT) / (apexT * (apexT - 1))
+      const B = dy - A
+      const C = startY
 
-      // Calculate flight time based on physics
-      const riseFrames = Math.round((25 / ballSpeed) * Math.sqrt(apexHeight / 100))
-      const fallFrames = Math.round(30 * Math.sqrt(apexHeight / 100))
-      const flightFrames = Math.max(15, Math.min(totalFrames - params.impactFrame - 1, riseFrames + fallFrames))
-      const riseFraction = riseFrames / (riseFrames + fallFrames)
-
-      // Generate trajectory points using physics
+      // Generate trajectory points for drawing (just positions, no frame scaling needed for preview)
       const trajectoryPoints: { x: number; y: number }[] = []
       for (let i = 0; i <= flightFrames; i++) {
-        const frameIndex = params.impactFrame + i
-
-        // Stop if we've exceeded the video length
-        if (frameIndex >= totalFrames) break
-
         const t = i / flightFrames
 
-        // X: linear motion
-        let x = startX + dx * t
+        // X: Linear motion
+        let x = startX + (endX - startX) * t
 
-        // Y: smooth parabola using Lagrange interpolation
-        const y0 = startY
-        const y1 = startY - apexHeight  // peak
-        const y2 = endY
-        const t1 = riseFraction
+        // Y: Quadratic parabola
+        let y = A * t * t + B * t + C
 
-        const L0 = ((t - t1) * (t - 1)) / ((0 - t1) * (0 - 1))
-        const L1 = ((t - 0) * (t - 1)) / ((t1 - 0) * (t1 - 1))
-        const L2 = ((t - 0) * (t - t1)) / ((1 - 0) * (1 - t1))
-
-        let y = y0 * L0 + y1 * L1 + y2 * L2
-
-        // Add draw/fade curve offset
+        // Add curve offset
         const curveOffset = Math.sin(t * Math.PI) * curve * videoWidth * 0.2
         x += curveOffset
 
@@ -468,8 +472,8 @@ export function ManualTracerCreator({
               <input
                 type="range"
                 min="0.5"
-                max="2.0"
-                step="0.1"
+                max="10"
+                step="0.5"
                 value={params.ballSpeed}
                 onChange={(e) => setParams(p => ({ ...p, ballSpeed: Number(e.target.value) }))}
                 className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
