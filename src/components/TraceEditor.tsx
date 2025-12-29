@@ -146,15 +146,11 @@ export function TraceEditor({
     const maxFrames = totalFrames - impactFrame - 1
     const flightFrames = Math.min(totalFlightFrames, maxFrames)
 
-    console.log(`[TraceEditor] ballSpeed=${ballSpeed}, riseFrames=${riseFrames}, fallFrames=${fallFrames}, flightFrames=${flightFrames}, lastFrame=${impactFrame + flightFrames}`)
-
     const newPoints: TrackPoint[] = []
 
     // Total frames for the animation
     const totalAnimFrames = riseFrames + fallFrames
     const apexT = riseFrames / totalAnimFrames  // When apex occurs (0-1)
-
-    console.log(`[TraceEditor] ballSpeed=${ballSpeed}, riseFrames=${riseFrames}, fallFrames=${fallFrames}, apexT=${apexT.toFixed(2)}`)
 
     for (let i = 0; i <= flightFrames; i++) {
       const frameIndex = impactFrame + i
@@ -203,13 +199,11 @@ export function TraceEditor({
       })
     }
 
-    console.log(`[TraceEditor] Generated ${newPoints.length} points, frames ${newPoints[0]?.frameIndex} to ${newPoints[newPoints.length-1]?.frameIndex}`)
     onPointsUpdate(newPoints)
   }, [startPos, impactFrame, videoWidth, videoHeight, totalFrames, onPointsUpdate])
 
   // Handle slider changes - apply relative adjustments to preserve manual edits
   const handleParamChange = useCallback((key: keyof TracerParams, value: number) => {
-    console.log(`[TraceEditor] handleParamChange: ${key} = ${value}`)
     const oldParams = params
     const newParams = { ...params, [key]: value }
     setParams(newParams)

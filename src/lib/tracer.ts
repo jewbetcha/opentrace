@@ -13,12 +13,6 @@ export function drawTracer(
 ): void {
   const visiblePoints = points.filter(p => p.frameIndex <= currentFrame)
 
-  // Log occasionally to avoid spam
-  if (currentFrame % 30 === 0) {
-    const lastFrame = points.length > 0 ? points[points.length - 1].frameIndex : 0
-    console.log(`[drawTracer] currentFrame=${currentFrame}, totalPoints=${points.length}, visiblePoints=${visiblePoints.length}, lastPointFrame=${lastFrame}`)
-  }
-
   if (visiblePoints.length < 2) return
 
   ctx.save()
