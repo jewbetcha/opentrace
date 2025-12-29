@@ -30,6 +30,39 @@ async function getFFmpeg(): Promise<FFmpeg> {
   return ffmpeg
 }
 
+// Create high-quality canvas context optimized for export
+function createExportCanvas(width: number, height: number): { canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D } {
+  // Try OffscreenCanvas for potential GPU acceleration
+  if (typeof OffscreenCanvas !== 'undefined') {
+    try {
+      const canvas = new OffscreenCanvas(width, height)
+      const ctx = canvas.getContext('2d', {
+        alpha: false,
+        desynchronized: true, // Hint for GPU acceleration
+      })
+      if (ctx) {
+        // Enable high-quality image rendering
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+        return { canvas, ctx }
+      }
+    } catch {
+      // Fall through to regular canvas
+    }
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d', {
+    alpha: false,
+    willReadFrequently: true // Optimize for frequent readback
+  })!
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  return { canvas, ctx }
+}
+
 // Check if WebCodecs is available
 function hasWebCodecs(): boolean {
   return typeof VideoDecoder !== 'undefined' && typeof VideoFrame !== 'undefined'
@@ -58,10 +91,8 @@ export function useVideoExport(): UseVideoExportReturn {
     setError(null)
     abortRef.current = false
 
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d', { alpha: false })!
+    // Create high-quality canvas for export
+    const { canvas, ctx } = createExportCanvas(video.videoWidth, video.videoHeight)
 
     const duration = video.duration
     const totalFrames = Math.floor(duration * fps)
@@ -93,44 +124,54 @@ export function useVideoExport(): UseVideoExportReturn {
         throw new Error('Export cancelled')
       }
 
-      // Write all frames to FFmpeg filesystem
+      // Write all frames to FFmpeg filesystem (PNG for lossless quality)
       for (let i = 0; i < frames.length; i++) {
-        const frameName = `frame${i.toString().padStart(6, '0')}.jpg`
+        const frameName = `frame${i.toString().padStart(6, '0')}.png`
         await ff.writeFile(frameName, frames[i])
       }
       setProgress(0.82)
 
-      // Encode to MOV using FFmpeg with high quality settings
+      // Calculate a high bitrate based on resolution (aim for ~15-20 Mbps for 1080p)
+      const pixels = video.videoWidth * video.videoHeight
+      const baseBitrate = Math.max(8, Math.round((pixels / (1920 * 1080)) * 18))
+      const bitrate = `${baseBitrate}M`
+
+      // Encode to MP4 using FFmpeg with maximum quality settings
+      // Using CRF 12 for near-lossless quality and high bitrate cap
       await ff.exec([
         '-framerate', fps.toString(),
-        '-i', 'frame%06d.jpg',
+        '-i', 'frame%06d.png',
         '-c:v', 'libx264',
-        '-preset', 'slow',
-        '-crf', '18',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
+        '-preset', 'slow',        // Better compression, higher quality
+        '-crf', '12',             // Near-lossless quality (lower = better, 0-51 range)
+        '-maxrate', bitrate,      // Maximum bitrate cap
+        '-bufsize', `${baseBitrate * 2}M`, // Buffer size for rate control
+        '-pix_fmt', 'yuv420p',    // Compatibility
+        '-movflags', '+faststart', // Fast web playback
+        '-profile:v', 'high',     // H.264 High Profile for better quality
+        '-level', '4.2',          // High compatibility level
         '-r', fps.toString(),
         '-y',
-        'output.mov'
+        'output.mp4'
       ])
 
       // Read the output file
-      const data = await ff.readFile('output.mov')
+      const data = await ff.readFile('output.mp4')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const outputBlob = new Blob([data as any], { type: 'video/quicktime' })
+      const outputBlob = new Blob([data as any], { type: 'video/mp4' })
 
       // Clean up frames
       for (let i = 0; i < frames.length; i++) {
-        const frameName = `frame${i.toString().padStart(6, '0')}.jpg`
+        const frameName = `frame${i.toString().padStart(6, '0')}.png`
         await ff.deleteFile(frameName)
       }
-      await ff.deleteFile('output.mov')
+      await ff.deleteFile('output.mp4')
 
       // Auto-download the file
       const url = URL.createObjectURL(outputBlob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'traced-shot.mov'
+      a.download = 'traced-shot.mp4'
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -161,11 +202,21 @@ export function useVideoExport(): UseVideoExportReturn {
   }
 }
 
+// Helper to convert canvas to PNG blob
+async function canvasToPngBlob(canvas: HTMLCanvasElement | OffscreenCanvas): Promise<Blob> {
+  if (canvas instanceof OffscreenCanvas) {
+    return await canvas.convertToBlob({ type: 'image/png' })
+  }
+  return new Promise<Blob>((resolve) => {
+    canvas.toBlob((b) => resolve(b!), 'image/png')
+  })
+}
+
 // WebCodecs-based frame extraction (frame-accurate)
 async function extractFramesWebCodecs(
   videoFile: File,
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement | OffscreenCanvas,
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   points: TrackPoint[],
   fps: number,
   totalFrames: number,
@@ -211,11 +262,11 @@ async function extractFramesWebCodecs(
       ctx.drawImage(tempVideo, 0, 0)
     }
 
-    drawTracer(ctx, points, frame, style)
+    // Draw tracer overlay
+    drawTracer(ctx as CanvasRenderingContext2D, points, frame, style)
 
-    const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
-    })
+    // Convert to PNG for lossless quality
+    const blob = await canvasToPngBlob(canvas)
     frames.push(new Uint8Array(await blob.arrayBuffer()))
 
     setProgress((frame + 1) / totalFrames * 0.8)
@@ -228,8 +279,8 @@ async function extractFramesWebCodecs(
 // Fallback extraction using video element
 async function extractFramesFallback(
   video: HTMLVideoElement,
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement | OffscreenCanvas,
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   points: TrackPoint[],
   fps: number,
   totalFrames: number,
@@ -262,11 +313,10 @@ async function extractFramesFallback(
     })
 
     ctx.drawImage(video, 0, 0)
-    drawTracer(ctx, points, frame, style)
+    drawTracer(ctx as CanvasRenderingContext2D, points, frame, style)
 
-    const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
-    })
+    // Convert to PNG for lossless quality
+    const blob = await canvasToPngBlob(canvas)
     frames.push(new Uint8Array(await blob.arrayBuffer()))
 
     setProgress((frame + 1) / totalFrames * 0.8)

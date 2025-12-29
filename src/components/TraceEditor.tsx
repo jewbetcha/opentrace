@@ -156,9 +156,6 @@ export function TraceEditor({
       const frameIndex = impactFrame + i
       if (frameIndex >= totalFrames) break
 
-      // Frame-based timing: which phase are we in?
-      const frameT = i / flightFrames
-
       // Map frame time to curve position
       // Rise phase: frames 0 to riseFrames map to curve t = 0 to apexT
       // Fall phase: frames riseFrames to total map to curve t = apexT to 1
