@@ -27,4 +27,4 @@ npm-debug.log*
 public/models/*.onnx
 
 .playwright-mcp/
-test_files/
+test_files/.venv
