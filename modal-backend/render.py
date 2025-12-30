@@ -18,9 +18,10 @@ image = (
 @app.function(
     image=image,
     timeout=900,  # 15 minute timeout for longer videos
-    memory=4096,  # 4GB RAM for large videos
+    memory=8192,  # 8GB RAM for large videos
+    cpu=4,  # More CPU cores for faster processing
 )
-@modal.web_endpoint(method="POST")
+@modal.fastapi_endpoint(method="POST")
 def render_video(data: dict):
     """
     Render a video with tracer overlay.
@@ -81,17 +82,30 @@ def render_video(data: dict):
         line_width = style.get("lineWidth", 4)
         glow_intensity = style.get("glowIntensity", 10)
 
-        # Adaptive supersampling - reduce for longer videos to save time/memory
-        if total_frames > 600:  # > 10 seconds at 60fps
-            scale = 2
-        elif total_frames > 300:  # > 5 seconds
-            scale = 3
-        else:
-            scale = 4
+        # Adaptive supersampling - consider BOTH resolution and duration
+        # High-res videos (1080p+) don't need as much supersampling
+        total_pixels = width * height
+        is_high_res = total_pixels > 1920 * 1080  # > 1080p
+        is_very_high_res = total_pixels > 1920 * 1920  # Portrait 1080p or larger
 
+        if is_very_high_res or total_frames > 600:
+            scale = 2  # 2x for very large videos
+        elif is_high_res or total_frames > 300:
+            scale = 2  # 2x for high-res - 4x creates 4320x7680 images!
+        else:
+            scale = 3  # 3x max for smaller videos
+
+        # Find first and last frame with tracer for optimization
+        first_tracer_frame = min(p["frameIndex"] for p in points) if points else 0
+        last_tracer_frame = max(p["frameIndex"] for p in points) if points else total_frames
+        first_output_frame = int(first_tracer_frame * fps_scale)
+
+        print(f"[RENDER] Resolution: {width}x{height} ({total_pixels/1e6:.1f}MP), high_res={is_high_res}, very_high_res={is_very_high_res}")
+        print(f"[RENDER] Tracer spans frames {first_tracer_frame}-{last_tracer_frame} (source), starting output at frame {first_output_frame}")
         print(f"[RENDER] Generating {total_frames} overlay frames at {scale}x supersampling")
         frame_gen_start = time.time()
         last_progress_log = 0
+        frames_with_content = 0
 
         for frame_idx in range(total_frames):
             # Log progress every 10%
@@ -102,9 +116,6 @@ def render_video(data: dict):
                 remaining = (total_frames - frame_idx) / fps_rate if fps_rate > 0 else 0
                 print(f"[RENDER] Frame generation: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} frames/sec, ~{remaining:.1f}s remaining")
                 last_progress_log = progress_pct
-            # Create transparent image (higher res for anti-aliasing)
-            img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
 
             # Scale frame index back to source fps for comparison
             source_frame_idx = frame_idx / fps_scale
@@ -112,7 +123,21 @@ def render_video(data: dict):
             # Get visible points up to this frame (using scaled frame index)
             visible_points = [p for p in points if p["frameIndex"] <= source_frame_idx]
 
-            if len(visible_points) >= 2:
+            # For frames before tracer or with < 2 points, create empty overlay quickly
+            if len(visible_points) < 2:
+                img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                frame_path = os.path.join(overlay_dir, f"overlay{frame_idx:06d}.png")
+                img.save(frame_path, "PNG")
+                continue
+
+            frames_with_content += 1
+
+            # Create transparent image (higher res for anti-aliasing)
+            img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+
+            # Draw tracer (we know we have >= 2 points from early continue above)
+            if True:
                 # Draw glow layer first (thicker, blurred)
                 if glow_intensity > 0:
                     glow_img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
@@ -196,6 +221,7 @@ def render_video(data: dict):
 
         frame_gen_elapsed = time.time() - frame_gen_start
         print(f"[RENDER] Frame generation complete: {total_frames} frames in {frame_gen_elapsed:.2f}s ({total_frames/frame_gen_elapsed:.1f} fps)")
+        print(f"[RENDER] Frames with tracer content: {frames_with_content}/{total_frames} ({100*frames_with_content/total_frames:.1f}%)")
 
         # Use FFmpeg to composite overlay onto original video
         output_path = os.path.join(tmpdir, "output.mp4")
