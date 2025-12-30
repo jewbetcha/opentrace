@@ -169,7 +169,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       <video
         ref={videoRef}
         src={videoUrl}
-        className="max-w-full max-h-full"
+        className="absolute inset-0 w-full h-full object-contain"
         playsInline
         webkit-playsinline="true"
         muted
@@ -188,13 +188,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       {/* Tracer overlay canvas */}
       <canvas
         ref={canvasRef}
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
-        style={{
-          maxWidth: '100%',
-          maxHeight: '100%',
-          width: 'auto',
-          height: 'auto'
-        }}
+        className="absolute inset-0 w-full h-full object-contain pointer-events-none"
       />
 
       {/* Editor overlay slot */}
