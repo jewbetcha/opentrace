@@ -16,6 +16,13 @@ type AppState =
   | { type: 'exporting' }
   | { type: 'complete' }
 
+// Toast notification type
+interface Toast {
+  id: number
+  type: 'success' | 'error'
+  message: string
+}
+
 export default function App() {
   const [appState, setAppState] = useState<AppState>({ type: 'idle' })
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
@@ -25,6 +32,16 @@ export default function App() {
   const [currentFrame, setCurrentFrame] = useState(0)
   const [tracerColor, setTracerColor] = useState('#3B82F6')
   const [tracerSpeed, setTracerSpeed] = useState(1.0)
+  const [toasts, setToasts] = useState<Toast[]>([])
+
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, type, message }])
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, 4000)
+  }, [])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const videoPlayerRef = useRef<VideoPlayerHandle>(null)
@@ -112,13 +129,16 @@ export default function App() {
         lineWidth: 4,
         glowIntensity: 10
       })
-      // Auto-download happens in exportVideo, go back to editing
+      // Success!
+      showToast('success', 'Video saved! Check your camera roll.')
       setAppState({ type: 'editing' })
     } catch (err) {
       console.error('Export failed:', err)
+      const message = err instanceof Error ? err.message : 'Export failed'
+      showToast('error', message)
       setAppState({ type: 'editing' })
     }
-  }, [video, videoFile, points, metadata, tracerColor, exportVideo])
+  }, [video, videoFile, points, metadata, tracerColor, exportVideo, showToast])
 
   const handleStartOver = useCallback(() => {
     if (videoUrl) {
@@ -277,8 +297,52 @@ export default function App() {
           </div>
         </div>
 
+        {/* Toast notifications */}
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className={`
+                px-4 py-2.5 rounded-xl backdrop-blur-sm shadow-lg
+                flex items-center gap-2 animate-slide-down
+                ${toast.type === 'success'
+                  ? 'bg-green-500/90 text-white'
+                  : 'bg-red-500/90 text-white'
+                }
+              `}
+              style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
+            >
+              {toast.type === 'success' ? (
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+              <span className="text-sm font-medium">{toast.message}</span>
+            </div>
+          ))}
+        </div>
+
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&display=swap');
+
+          @keyframes slide-down {
+            from {
+              opacity: 0;
+              transform: translateY(-10px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+
+          .animate-slide-down {
+            animation: slide-down 0.2s ease-out;
+          }
         `}</style>
       </div>
     )

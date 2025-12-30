@@ -18,6 +18,18 @@ interface UseVideoExportReturn {
 // Modal endpoint - set via environment variable
 const MODAL_ENDPOINT = import.meta.env.VITE_MODAL_ENDPOINT || ''
 
+// Helper to download file (fallback for desktop)
+function downloadFile(blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'traced-shot.mp4'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 export function useVideoExport(): UseVideoExportReturn {
   const [isExporting, setIsExporting] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -112,7 +124,7 @@ export function useVideoExport(): UseVideoExportReturn {
 
       setProgress(0.9)
 
-      // Convert base64 response to blob and download
+      // Convert base64 response to blob
       const outputBytes = atob(result.video_base64)
       const outputArray = new Uint8Array(outputBytes.length)
       for (let i = 0; i < outputBytes.length; i++) {
@@ -120,15 +132,25 @@ export function useVideoExport(): UseVideoExportReturn {
       }
       const outputBlob = new Blob([outputArray], { type: 'video/mp4' })
 
-      // Download
-      const url = URL.createObjectURL(outputBlob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'traced-shot.mp4'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      // Try Web Share API first (saves to camera roll on mobile)
+      const file = new File([outputBlob], 'traced-shot.mp4', { type: 'video/mp4' })
+
+      if (navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'Traced Shot',
+          })
+        } catch (shareErr) {
+          // User cancelled share or share failed - fall back to download
+          if ((shareErr as Error).name !== 'AbortError') {
+            downloadFile(outputBlob)
+          }
+        }
+      } else {
+        // Fallback for desktop or browsers without Web Share API
+        downloadFile(outputBlob)
+      }
 
       setProgress(1)
     } catch (err) {

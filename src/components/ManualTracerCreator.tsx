@@ -345,38 +345,32 @@ export function ManualTracerCreator({
         }}
       />
 
-      {/* Impact frame selection */}
+      {/* Impact frame selection - compact */}
       {mode === 'impact' && (
-        <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black via-black/95 to-transparent pt-8 pb-6 px-4">
-          <div className="max-w-md mx-auto">
-            <h3 className="text-lg font-medium text-white mb-1 text-center" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
-              Find the Impact Frame
-            </h3>
-            <p className="text-sm text-neutral-400 mb-4 text-center">
-              Scrub to find the exact moment the club hits the ball
+        <div className="absolute inset-x-0 bottom-0 z-20 bg-black/95 backdrop-blur-sm py-3 px-3 border-t border-white/5">
+          <div className="max-w-sm mx-auto space-y-2">
+            <p className="text-[11px] text-white/50 text-center">
+              Scrub to the moment of impact
             </p>
 
             {/* Frame scrubber */}
-            <div className="mb-4">
-              <input
-                type="range"
-                min="0"
-                max={totalFrames - 1}
-                value={currentFrame}
-                onChange={(e) => {
-                  const frame = Number(e.target.value)
-                  // Seek video via parent
-                  const video = document.querySelector('video')
-                  if (video) {
-                    video.currentTime = frame / fps
-                  }
-                }}
-                className="w-full h-2 bg-neutral-800 rounded-full appearance-none cursor-pointer"
-              />
-            </div>
+            <input
+              type="range"
+              min="0"
+              max={totalFrames - 1}
+              value={currentFrame}
+              onChange={(e) => {
+                const frame = Number(e.target.value)
+                const video = document.querySelector('video')
+                if (video) {
+                  video.currentTime = frame / fps
+                }
+              }}
+              className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+            />
 
-            {/* Frame step controls */}
-            <div className="flex items-center justify-center gap-4 mb-4">
+            {/* Frame step controls - inline compact */}
+            <div className="flex items-center justify-center gap-3">
               <button
                 onClick={() => {
                   const video = document.querySelector('video')
@@ -384,15 +378,15 @@ export function ManualTracerCreator({
                     video.currentTime = Math.max(0, video.currentTime - 1/fps)
                   }
                 }}
-                className="w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:bg-white/30 transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:bg-white/30 transition-colors"
               >
-                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
 
-              <div className="text-2xl font-bold text-[#FFD700] tabular-nums min-w-[140px] text-center" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
-                {currentFrame} / {totalFrames}
+              <div className="text-sm font-semibold text-[#FFD700] tabular-nums" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
+                {currentFrame} <span className="text-white/40">/ {totalFrames}</span>
               </div>
 
               <button
@@ -402,9 +396,9 @@ export function ManualTracerCreator({
                     video.currentTime = Math.min(video.duration, video.currentTime + 1/fps)
                   }
                 }}
-                className="w-12 h-12 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:bg-white/30 transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:bg-white/30 transition-colors"
               >
-                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
               </button>
@@ -412,7 +406,7 @@ export function ManualTracerCreator({
 
             <button
               onClick={handleImpactConfirm}
-              className="w-full py-4 rounded-xl bg-gradient-to-r from-[#FFD700] to-[#FF4500] text-black font-semibold text-lg hover:opacity-90 transition-opacity touch-target"
+              className="w-full py-2 rounded-lg bg-[#FFD700] text-black font-semibold text-xs hover:bg-[#FFD700]/90 transition-colors"
               style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
             >
               Set Impact Frame
@@ -421,54 +415,48 @@ export function ManualTracerCreator({
         </div>
       )}
 
-      {/* Start/End point instructions */}
+      {/* Start/End point instructions - compact pill */}
       {(mode === 'start' || mode === 'end') && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 px-5 py-3 rounded-2xl bg-black/80 backdrop-blur-sm">
-          <p className="text-white text-center" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
-            {mode === 'start' && 'Tap where the ball starts'}
-            {mode === 'end' && 'Tap where the ball lands'}
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-sm">
+          <p className="text-xs text-white/90" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
+            {mode === 'start' && 'Tap ball start position'}
+            {mode === 'end' && 'Tap ball landing spot'}
           </p>
         </div>
       )}
 
-      {/* Adjustment controls - compact layout */}
+      {/* Adjustment controls - ultra compact */}
       {mode === 'adjust' && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm pt-4 pb-4 px-4 border-t border-white/10">
-          <div className="max-w-md mx-auto space-y-3">
-            {/* Peak Height */}
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Height</label>
+        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm py-3 px-3 border-t border-white/5">
+          <div className="max-w-sm mx-auto space-y-2">
+            {/* Sliders in a tight grid */}
+            <div className="grid grid-cols-[auto_1fr_auto] gap-x-2 gap-y-1.5 items-center text-[11px]">
+              <span className="text-white/50 font-medium">Height</span>
               <input
                 type="range"
                 min="0"
                 max="80"
                 value={params.peakHeight * 100}
                 onChange={(e) => setParams(p => ({ ...p, peakHeight: Number(e.target.value) / 100 }))}
-                className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">{Math.round(params.peakHeight * 100)}%</span>
-            </div>
+              <span className="text-white/70 tabular-nums w-8 text-right">{Math.round(params.peakHeight * 100)}%</span>
 
-            {/* Curve */}
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Curve</label>
+              <span className="text-white/50 font-medium">Curve</span>
               <input
                 type="range"
                 min="-100"
                 max="100"
                 value={params.curve * 100}
                 onChange={(e) => setParams(p => ({ ...p, curve: Number(e.target.value) / 100 }))}
-                className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">
+              <span className="text-white/70 tabular-nums w-8 text-right">
                 {params.curve > 0 ? `+${Math.round(params.curve * 100)}` :
                  params.curve < 0 ? `${Math.round(params.curve * 100)}` : '0'}
               </span>
-            </div>
 
-            {/* Ball Speed */}
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Speed</label>
+              <span className="text-white/50 font-medium">Speed</span>
               <input
                 type="range"
                 min="0.5"
@@ -476,49 +464,50 @@ export function ManualTracerCreator({
                 step="0.5"
                 value={params.ballSpeed}
                 onChange={(e) => setParams(p => ({ ...p, ballSpeed: Number(e.target.value) }))}
-                className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">{params.ballSpeed.toFixed(1)}x</span>
+              <span className="text-white/70 tabular-nums w-8 text-right">{params.ballSpeed.toFixed(1)}x</span>
             </div>
 
-            {/* Color picker - inline */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Color</span>
-              <div className="flex gap-2 flex-1">
+            {/* Color picker - compact */}
+            <div className="flex items-center gap-2 pt-0.5">
+              <span className="text-[11px] text-white/50 font-medium">Color</span>
+              <div className="flex gap-1.5 flex-1">
                 {TRACER_COLORS.map((c) => (
                   <button
                     key={c.value}
                     onClick={() => setParams(p => ({ ...p, color: c.value }))}
-                    className={`w-7 h-7 rounded-full border-2 transition-all flex-shrink-0 ${
+                    className={`w-5 h-5 rounded-full transition-transform ${
                       params.color === c.value
-                        ? 'border-white scale-110'
-                        : 'border-transparent opacity-60 hover:opacity-100'
+                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black scale-110'
+                        : 'opacity-50 hover:opacity-80'
                     }`}
-                    style={{ backgroundColor: c.value, boxShadow: params.color === c.value ? `0 0 8px ${c.value}` : 'none' }}
+                    style={{ backgroundColor: c.value }}
                     title={c.name}
                   />
                 ))}
               </div>
             </div>
 
-            {/* Action buttons */}
-            <div className="flex gap-3 pt-1">
+            {/* Action buttons - slim */}
+            <div className="flex gap-2 pt-1">
               <button
                 onClick={() => {
                   setMode('impact')
                   setParams(p => ({ ...p, startX: 0, startY: 0, endX: 0, endY: 0 }))
+                  setPointsSet({ start: false, end: false })
                 }}
-                className="flex-1 py-2.5 rounded-xl bg-neutral-800 text-white text-sm font-medium hover:bg-neutral-700 transition-colors touch-target"
+                className="flex-1 py-1.5 rounded-lg bg-white/5 text-white/70 text-[11px] font-medium hover:bg-white/10 transition-colors"
                 style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
               >
-                Start Over
+                Reset
               </button>
               <button
                 onClick={handleComplete}
-                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#FFD700] to-[#FF4500] text-black text-sm font-semibold hover:opacity-90 transition-opacity touch-target"
+                className="flex-1 py-1.5 rounded-lg bg-[#FFD700] text-black text-[11px] font-semibold hover:bg-[#FFD700]/90 transition-colors"
                 style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
               >
-                Apply & Edit Curve
+                Continue
               </button>
             </div>
           </div>
@@ -531,30 +520,31 @@ export function ManualTracerCreator({
         input[type="range"] {
           -webkit-appearance: none;
           appearance: none;
-          background: #262626;
+          background: #1a1a1a;
           border-radius: 9999px;
+          height: 4px;
         }
 
         input[type="range"]::-webkit-slider-thumb {
           -webkit-appearance: none;
           appearance: none;
-          width: 20px;
-          height: 20px;
+          width: 14px;
+          height: 14px;
           border-radius: 50%;
           background: #FFD700;
           cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+          border: none;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         }
 
         input[type="range"]::-moz-range-thumb {
-          width: 20px;
-          height: 20px;
+          width: 14px;
+          height: 14px;
           border-radius: 50%;
           background: #FFD700;
           cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+          border: none;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         }
       `}</style>
     </>
