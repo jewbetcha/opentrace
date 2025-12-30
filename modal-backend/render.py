@@ -85,22 +85,22 @@ def render_video(data: dict):
         # Adaptive supersampling - consider BOTH resolution and duration
         # High-res videos (1080p+) don't need as much supersampling
         total_pixels = width * height
-        is_high_res = total_pixels > 1920 * 1080  # > 1080p
-        is_very_high_res = total_pixels > 1920 * 1920  # Portrait 1080p or larger
+        is_high_res = total_pixels >= 1920 * 1080  # >= 1080p (includes portrait 1080x1920)
+        is_4k = total_pixels >= 3840 * 2160
 
-        if is_very_high_res or total_frames > 600:
-            scale = 2  # 2x for very large videos
+        if is_4k or total_frames > 600:
+            scale = 1  # No supersampling for 4K
         elif is_high_res or total_frames > 300:
-            scale = 2  # 2x for high-res - 4x creates 4320x7680 images!
+            scale = 2  # 2x for 1080p
         else:
-            scale = 3  # 3x max for smaller videos
+            scale = 2  # 2x max - 3x is too slow with glow effects
 
         # Find first and last frame with tracer for optimization
         first_tracer_frame = min(p["frameIndex"] for p in points) if points else 0
         last_tracer_frame = max(p["frameIndex"] for p in points) if points else total_frames
         first_output_frame = int(first_tracer_frame * fps_scale)
 
-        print(f"[RENDER] Resolution: {width}x{height} ({total_pixels/1e6:.1f}MP), high_res={is_high_res}, very_high_res={is_very_high_res}")
+        print(f"[RENDER] Resolution: {width}x{height} ({total_pixels/1e6:.1f}MP), high_res={is_high_res}, is_4k={is_4k}")
         print(f"[RENDER] Tracer spans frames {first_tracer_frame}-{last_tracer_frame} (source), starting output at frame {first_output_frame}")
         print(f"[RENDER] Generating {total_frames} overlay frames at {scale}x supersampling")
         frame_gen_start = time.time()
@@ -136,81 +136,56 @@ def render_video(data: dict):
             img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Draw tracer (we know we have >= 2 points from early continue above)
-            if True:
-                # Draw glow layer first (thicker, blurred)
-                if glow_intensity > 0:
-                    glow_img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
-                    glow_draw = ImageDraw.Draw(glow_img)
+            # Draw tracer - optimized version without expensive blur
+            # Draw glow as multiple semi-transparent thick lines (much faster than blur)
+            if glow_intensity > 0:
+                for layer in range(3, 0, -1):  # 3 glow layers, outer to inner
+                    alpha = int(40 / layer)  # Decreasing opacity
+                    glow_width = line_width + glow_intensity * layer * 0.5
 
                     for i in range(1, len(visible_points)):
                         p1 = visible_points[i - 1]
                         p2 = visible_points[i]
                         t = i / (len(visible_points) - 1) if len(visible_points) > 1 else 0
                         color = interpolate_color(style["startColor"], style["endColor"], t)
-                        glow_color = color[:3] + (100,)  # Semi-transparent for glow
+                        glow_color = color[:3] + (alpha,)
 
-                        glow_draw.line(
+                        draw.line(
                             [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
                             fill=glow_color,
-                            width=int((line_width + glow_intensity) * scale)
+                            width=int(glow_width * scale)
                         )
 
-                    # Blur the glow
-                    glow_img = glow_img.filter(ImageFilter.GaussianBlur(radius=glow_intensity * scale / 2))
-                    img = Image.alpha_composite(img, glow_img)
-                    draw = ImageDraw.Draw(img)
+            # Draw main tracer line with simple soft edge (2 passes instead of 3)
+            for i in range(1, len(visible_points)):
+                p1 = visible_points[i - 1]
+                p2 = visible_points[i]
+                t = i / (len(visible_points) - 1) if len(visible_points) > 1 else 0
+                color = interpolate_color(style["startColor"], style["endColor"], t)
+                base_width = line_width * (1 - t * 0.3) * scale
 
-                # Draw main tracer lines with soft edges (multiple passes)
-                for i in range(1, len(visible_points)):
-                    p1 = visible_points[i - 1]
-                    p2 = visible_points[i]
+                # Soft outer edge
+                outer_color = color[:3] + (120,)
+                draw.line(
+                    [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                    fill=outer_color,
+                    width=int(base_width * 1.3)
+                )
 
-                    # Interpolate color
-                    t = i / (len(visible_points) - 1) if len(visible_points) > 1 else 0
-                    color = interpolate_color(style["startColor"], style["endColor"], t)
+                # Core line
+                draw.line(
+                    [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                    fill=color,
+                    width=int(base_width)
+                )
 
-                    # Line width tapers
-                    base_width = line_width * (1 - t * 0.3) * scale
-
-                    # Draw multiple passes for softer anti-aliased edges
-                    # Outer soft edge
-                    outer_color = color[:3] + (80,)
-                    draw.line(
-                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                        fill=outer_color,
-                        width=int(base_width * 1.5)
-                    )
-
-                    # Middle layer
-                    mid_color = color[:3] + (180,)
-                    draw.line(
-                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                        fill=mid_color,
-                        width=int(base_width * 1.2)
-                    )
-
-                    # Core line (full opacity)
-                    draw.line(
-                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                        fill=color,
-                        width=int(base_width)
-                    )
-
-                    # Draw circles at joints for smoother connections
-                    radius = int(base_width * 0.6)
-                    # Outer circle
-                    draw.ellipse(
-                        [p2["x"] * scale - radius * 1.3, p2["y"] * scale - radius * 1.3,
-                         p2["x"] * scale + radius * 1.3, p2["y"] * scale + radius * 1.3],
-                        fill=outer_color
-                    )
-                    # Inner circle
-                    draw.ellipse(
-                        [p2["x"] * scale - radius, p2["y"] * scale - radius,
-                         p2["x"] * scale + radius, p2["y"] * scale + radius],
-                        fill=color
-                    )
+                # Joint circle for smooth connections
+                radius = int(base_width * 0.5)
+                draw.ellipse(
+                    [p2["x"] * scale - radius, p2["y"] * scale - radius,
+                     p2["x"] * scale + radius, p2["y"] * scale + radius],
+                    fill=color
+                )
 
             # Downscale for anti-aliasing effect
             img = img.resize((width, height), Image.LANCZOS)
