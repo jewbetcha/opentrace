@@ -11,15 +11,10 @@ export async function loadVideo(file: File): Promise<HTMLVideoElement> {
     const url = URL.createObjectURL(file)
     video.src = url
 
-    video.onloadeddata = () => {
+    video.onloadedmetadata = () => {
       // Force render on iOS by seeking slightly
       video.currentTime = 0.001
       resolve(video)
-    }
-
-    video.onloadedmetadata = () => {
-      // Also try to load the actual data
-      video.load()
     }
 
     video.onerror = () => {
@@ -27,7 +22,6 @@ export async function loadVideo(file: File): Promise<HTMLVideoElement> {
       reject(new Error('Failed to load video'))
     }
 
-    // Explicitly load the video
     video.load()
   })
 }
