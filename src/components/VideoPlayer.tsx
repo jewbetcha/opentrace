@@ -37,6 +37,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationRef = useRef<number>(0)
+  const hasInitializedRef = useRef(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const [totalFrames, setTotalFrames] = useState(0)
@@ -174,15 +175,22 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
         webkit-playsinline="true"
         muted
         preload="auto"
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
         onLoadedData={() => {
-          // Force a render on iOS by seeking to start
+          // Force render on iOS by play/pause
           const video = videoRef.current
-          if (video) {
-            video.currentTime = 0.001
+          if (video && !hasInitializedRef.current) {
+            hasInitializedRef.current = true
+            video.play().then(() => {
+              video.pause()
+              video.currentTime = 0
+            }).catch(() => {
+              // Autoplay blocked, just seek
+              video.currentTime = 0.001
+            })
           }
         }}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
       />
 
       {/* Tracer overlay canvas */}
