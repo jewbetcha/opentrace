@@ -11,7 +11,7 @@ app = modal.App("opentrace-render")
 image = (
     modal.Image.debian_slim()
     .apt_install("ffmpeg")
-    .pip_install("Pillow", "fastapi")
+    .pip_install("Pillow", "fastapi", "aggdraw")
 )
 
 
@@ -28,18 +28,20 @@ def render_video(data: dict):
     - video_base64: base64 encoded video file
     - points: array of {frameIndex, x, y} tracer points
     - fps: output framerate
+    - source_fps: original video framerate (for frame index scaling)
     - width: video width
     - height: video height
     - duration: video duration in seconds
     - style: {startColor, endColor, lineWidth, glowIntensity}
     """
     import base64
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFilter
     import io
 
     video_base64 = data["video_base64"]
     points = data["points"]
-    fps = data.get("fps", 60)
+    output_fps = data.get("fps", 60)
+    source_fps = data.get("source_fps", 30)  # FPS the frameIndex values are based on
     width = data["width"]
     height = data["height"]
     duration = data["duration"]
@@ -49,6 +51,9 @@ def render_video(data: dict):
         "lineWidth": 4,
         "glowIntensity": 10
     })
+
+    # Calculate frame scaling factor
+    fps_scale = output_fps / source_fps
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write input video
@@ -60,18 +65,47 @@ def render_video(data: dict):
         overlay_dir = os.path.join(tmpdir, "overlays")
         os.makedirs(overlay_dir)
 
-        total_frames = int(duration * fps)
+        total_frames = int(duration * output_fps)
+        line_width = style.get("lineWidth", 4)
+        glow_intensity = style.get("glowIntensity", 10)
 
         for frame_idx in range(total_frames):
-            # Create transparent image
-            img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            # Create transparent image (higher res for anti-aliasing)
+            scale = 2  # Render at 2x for smoother lines
+            img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Get visible points up to this frame
-            visible_points = [p for p in points if p["frameIndex"] <= frame_idx]
+            # Scale frame index back to source fps for comparison
+            source_frame_idx = frame_idx / fps_scale
+
+            # Get visible points up to this frame (using scaled frame index)
+            visible_points = [p for p in points if p["frameIndex"] <= source_frame_idx]
 
             if len(visible_points) >= 2:
-                # Draw tracer line segments
+                # Draw glow layer first (thicker, blurred)
+                if glow_intensity > 0:
+                    glow_img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+                    glow_draw = ImageDraw.Draw(glow_img)
+
+                    for i in range(1, len(visible_points)):
+                        p1 = visible_points[i - 1]
+                        p2 = visible_points[i]
+                        t = i / (len(visible_points) - 1) if len(visible_points) > 1 else 0
+                        color = interpolate_color(style["startColor"], style["endColor"], t)
+                        glow_color = color[:3] + (100,)  # Semi-transparent for glow
+
+                        glow_draw.line(
+                            [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                            fill=glow_color,
+                            width=int((line_width + glow_intensity) * scale)
+                        )
+
+                    # Blur the glow
+                    glow_img = glow_img.filter(ImageFilter.GaussianBlur(radius=glow_intensity * scale / 2))
+                    img = Image.alpha_composite(img, glow_img)
+                    draw = ImageDraw.Draw(img)
+
+                # Draw main tracer lines
                 for i in range(1, len(visible_points)):
                     p1 = visible_points[i - 1]
                     p2 = visible_points[i]
@@ -81,15 +115,27 @@ def render_video(data: dict):
                     color = interpolate_color(style["startColor"], style["endColor"], t)
 
                     # Line width tapers
-                    line_width = int(style["lineWidth"] * (1 - t * 0.5))
-                    line_width = max(2, line_width)
+                    current_width = int(line_width * (1 - t * 0.3) * scale)
+                    current_width = max(2, current_width)
 
                     # Draw line
                     draw.line(
-                        [(p1["x"], p1["y"]), (p2["x"], p2["y"])],
+                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
                         fill=color,
-                        width=line_width
+                        width=current_width
                     )
+
+                    # Draw circles at joints for smoother connections
+                    if i < len(visible_points) - 1:
+                        radius = current_width // 2
+                        draw.ellipse(
+                            [p2["x"] * scale - radius, p2["y"] * scale - radius,
+                             p2["x"] * scale + radius, p2["y"] * scale + radius],
+                            fill=color
+                        )
+
+            # Downscale for anti-aliasing effect
+            img = img.resize((width, height), Image.LANCZOS)
 
             # Save frame
             frame_path = os.path.join(overlay_dir, f"overlay{frame_idx:06d}.png")
@@ -101,18 +147,19 @@ def render_video(data: dict):
         cmd = [
             "ffmpeg",
             "-i", input_path,
-            "-framerate", str(fps),
+            "-framerate", str(output_fps),
             "-i", os.path.join(overlay_dir, "overlay%06d.png"),
             "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[out]",
             "-map", "[out]",
-            "-map", "0:a?",
-            "-c:a", "copy",
+            "-map", "0:a:0?",  # Only first audio stream, if present
             "-c:v", "libx264",
+            "-c:a", "aac",  # Re-encode audio to avoid codec issues
+            "-b:a", "192k",
             "-preset", "fast",
             "-crf", "18",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
-            "-r", str(fps),
+            "-r", str(output_fps),
             "-y",
             output_path
         ]

@@ -9,7 +9,7 @@ interface UseVideoExportReturn {
     videoFile: File,
     video: HTMLVideoElement,
     points: TrackPoint[],
-    fps: number,
+    sourceFps: number,
     style?: TracerStyle
   ) => Promise<void>
   cancelExport: () => void
@@ -28,7 +28,7 @@ export function useVideoExport(): UseVideoExportReturn {
     videoFile: File,
     video: HTMLVideoElement,
     points: TrackPoint[],
-    fps: number,
+    sourceFps: number,
     style: TracerStyle = {
       startColor: '#FFD700',
       endColor: '#FF4500',
@@ -58,7 +58,8 @@ export function useVideoExport(): UseVideoExportReturn {
           x: p.x,
           y: p.y
         })),
-        fps,
+        fps: 60,  // Output at 60fps for smooth playback
+        source_fps: sourceFps,  // FPS the frameIndex values are based on
         width: video.videoWidth,
         height: video.videoHeight,
         duration: video.duration,

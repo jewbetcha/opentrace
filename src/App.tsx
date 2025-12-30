@@ -105,8 +105,8 @@ export default function App() {
     setAppState({ type: 'exporting' })
 
     try {
-      // Force 60fps for smooth export
-      await exportVideo(videoFile, video, points, 60, {
+      // Pass source FPS so Modal can scale frame indices correctly
+      await exportVideo(videoFile, video, points, metadata.fps, {
         startColor: tracerColor,
         endColor: tracerColor,
         lineWidth: 4,

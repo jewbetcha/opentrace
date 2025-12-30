@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 interface ExportButtonProps {
   onExport: () => Promise<void>
@@ -14,51 +14,88 @@ export function ExportButton({
   onCancel
 }: ExportButtonProps) {
   const [isHovered, setIsHovered] = useState(false)
+  const [dots, setDots] = useState('')
+
+  // Animate dots while waiting for server
+  useEffect(() => {
+    if (!isExporting) return
+    const interval = setInterval(() => {
+      setDots(d => d.length >= 3 ? '' : d + '.')
+    }, 500)
+    return () => clearInterval(interval)
+  }, [isExporting])
 
   const percentage = Math.round(progress * 100)
 
+  // Determine status message based on progress
+  const getStatusMessage = () => {
+    if (progress < 0.15) return 'Preparing video'
+    if (progress < 0.25) return 'Uploading to server'
+    if (progress < 0.85) return 'Rendering on server'
+    if (progress < 1) return 'Downloading result'
+    return 'Complete!'
+  }
+
   if (isExporting) {
+    const isWaitingForServer = progress >= 0.25 && progress < 0.85
+
     return (
       <div className="flex flex-col items-center gap-4">
-        {/* Progress ring */}
+        {/* Progress ring or pulsing indicator */}
         <div className="relative w-24 h-24">
-          <svg className="w-full h-full -rotate-90">
-            <circle
-              cx="48"
-              cy="48"
-              r="42"
-              fill="none"
-              stroke="#262626"
-              strokeWidth="6"
-            />
-            <circle
-              cx="48"
-              cy="48"
-              r="42"
-              fill="none"
-              stroke="url(#exportGradient)"
-              strokeWidth="6"
-              strokeLinecap="round"
-              strokeDasharray={2 * Math.PI * 42}
-              strokeDashoffset={2 * Math.PI * 42 * (1 - progress)}
-              className="transition-all duration-200"
-            />
-            <defs>
-              <linearGradient id="exportGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#FFD700" />
-                <stop offset="100%" stopColor="#FF4500" />
-              </linearGradient>
-            </defs>
-          </svg>
+          {isWaitingForServer ? (
+            // Pulsing animation while waiting for server
+            <>
+              <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#FFD700] to-[#FF4500] opacity-20 animate-ping" />
+              <div className="absolute inset-2 rounded-full bg-gradient-to-r from-[#FFD700] to-[#FF4500] opacity-30 animate-pulse" />
+              <div className="absolute inset-4 rounded-full bg-[#0a0a0a] flex items-center justify-center">
+                <svg className="w-10 h-10 text-[#FFD700] animate-spin" style={{ animationDuration: '3s' }} viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="40 20" />
+                </svg>
+              </div>
+            </>
+          ) : (
+            // Progress ring for upload/download phases
+            <svg className="w-full h-full -rotate-90">
+              <circle
+                cx="48"
+                cy="48"
+                r="42"
+                fill="none"
+                stroke="#262626"
+                strokeWidth="6"
+              />
+              <circle
+                cx="48"
+                cy="48"
+                r="42"
+                fill="none"
+                stroke="url(#exportGradient)"
+                strokeWidth="6"
+                strokeLinecap="round"
+                strokeDasharray={2 * Math.PI * 42}
+                strokeDashoffset={2 * Math.PI * 42 * (1 - progress)}
+                className="transition-all duration-200"
+              />
+              <defs>
+                <linearGradient id="exportGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#FFD700" />
+                  <stop offset="100%" stopColor="#FF4500" />
+                </linearGradient>
+              </defs>
+            </svg>
+          )}
 
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span
-              className="text-xl font-semibold text-white tabular-nums"
-              style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
-            >
-              {percentage}%
-            </span>
-          </div>
+          {!isWaitingForServer && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span
+                className="text-xl font-semibold text-white tabular-nums"
+                style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
+              >
+                {percentage}%
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="text-center">
@@ -66,10 +103,13 @@ export function ExportButton({
             className="text-white font-medium mb-1"
             style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
           >
-            {percentage < 80 ? 'Extracting frames...' : 'Encoding video...'}
+            {getStatusMessage()}{isWaitingForServer ? dots : ''}
           </p>
           <p className="text-sm text-neutral-500">
-            This may take a moment
+            {isWaitingForServer
+              ? 'This usually takes 30-60 seconds'
+              : 'Please wait'
+            }
           </p>
         </div>
 
