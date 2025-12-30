@@ -265,8 +265,8 @@ export default function App() {
           </VideoPlayer>
         </div>
 
-        {/* Export section */}
-        <div className="px-4 py-6 bg-gradient-to-t from-black to-transparent">
+        {/* Export section - compact */}
+        <div className="px-3 py-3 bg-black/80 backdrop-blur-sm border-t border-white/5">
           <div className="flex justify-center">
             <ExportButton
               onExport={handleExport}

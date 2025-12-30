@@ -441,24 +441,24 @@ export function TraceEditor({
 
   return (
     <>
-      {/* Edit mode toggle button */}
+      {/* Edit mode toggle button - compact pill */}
       <button
         onClick={() => setIsEditMode(!isEditMode)}
         className={`
-          absolute top-4 right-4 z-20 px-5 py-3 rounded-full
-          flex items-center gap-2 touch-target
-          transition-all duration-300
+          absolute top-3 right-3 z-20 px-3 py-1.5 rounded-full
+          flex items-center gap-1.5
+          transition-all duration-200
           ${isEditMode
-            ? 'bg-[#FFD700] text-black shadow-lg shadow-[#FFD700]/30'
-            : 'bg-gradient-to-r from-[#FFD700] to-[#FF4500] text-black shadow-lg shadow-black/30'
+            ? 'bg-[#FFD700] text-black'
+            : 'bg-white/10 text-white/90 backdrop-blur-sm'
           }
         `}
         style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
       >
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
         </svg>
-        <span className="text-sm font-semibold">
+        <span className="text-xs font-semibold">
           {isEditMode ? 'Editing' : 'Edit'}
         </span>
       </button>
@@ -475,49 +475,38 @@ export function TraceEditor({
         onMouseDown={handleStart}
       />
 
-      {/* Edit mode controls panel - compact */}
+      {/* Edit mode controls panel - ultra compact for mobile */}
       {isEditMode && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm pt-4 pb-4 px-4 border-t border-white/10">
-          <div className="max-w-md mx-auto space-y-3">
-            {/* Hint */}
-            <p className="text-xs text-center text-white/60" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
-              Drag control points to adjust curve
-            </p>
-
-            {/* Peak Height */}
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Height</label>
+        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm py-3 px-3 border-t border-white/5">
+          <div className="max-w-sm mx-auto space-y-2">
+            {/* Sliders in a tighter grid */}
+            <div className="grid grid-cols-[auto_1fr_auto] gap-x-2 gap-y-1.5 items-center text-[11px]">
+              <span className="text-white/50 font-medium">Height</span>
               <input
                 type="range"
                 min="5"
                 max="80"
                 value={params.peakHeight * 100}
                 onChange={(e) => handleParamChange('peakHeight', Number(e.target.value) / 100)}
-                className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-[#FFD700]"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">{Math.round(params.peakHeight * 100)}%</span>
-            </div>
+              <span className="text-white/70 tabular-nums w-8 text-right">{Math.round(params.peakHeight * 100)}%</span>
 
-            {/* Curve (Draw/Fade) */}
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Curve</label>
+              <span className="text-white/50 font-medium">Curve</span>
               <input
                 type="range"
                 min="-100"
                 max="100"
                 value={params.curve * 100}
                 onChange={(e) => handleParamChange('curve', Number(e.target.value) / 100)}
-                className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-[#FFD700]"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">
+              <span className="text-white/70 tabular-nums w-8 text-right">
                 {params.curve > 0.05 ? `+${Math.round(params.curve * 100)}` :
                  params.curve < -0.05 ? `${Math.round(params.curve * 100)}` : '0'}
               </span>
-            </div>
 
-            {/* Ball Speed */}
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Speed</label>
+              <span className="text-white/50 font-medium">Speed</span>
               <input
                 type="range"
                 min="0.5"
@@ -525,46 +514,46 @@ export function TraceEditor({
                 step="0.5"
                 value={params.ballSpeed}
                 onChange={(e) => handleParamChange('ballSpeed', Number(e.target.value))}
-                className="flex-1 h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-[#FFD700]"
               />
-              <span className="text-xs text-white tabular-nums w-10 text-right">{params.ballSpeed.toFixed(1)}x</span>
+              <span className="text-white/70 tabular-nums w-8 text-right">{params.ballSpeed.toFixed(1)}x</span>
             </div>
 
-            {/* Color picker - inline */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-white/80 w-12 flex-shrink-0 font-medium">Color</span>
-              <div className="flex gap-2 flex-1">
+            {/* Color picker - compact horizontal row */}
+            <div className="flex items-center gap-2 pt-0.5">
+              <span className="text-[11px] text-white/50 font-medium">Color</span>
+              <div className="flex gap-1.5 flex-1">
                 {TRACER_COLORS.map((c) => (
                   <button
                     key={c.value}
                     onClick={() => onColorChange(c.value)}
-                    className={`w-7 h-7 rounded-full border-2 transition-all flex-shrink-0 ${
+                    className={`w-5 h-5 rounded-full transition-transform ${
                       tracerColor === c.value
-                        ? 'border-white scale-110'
-                        : 'border-transparent opacity-60 hover:opacity-100'
+                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black scale-110'
+                        : 'opacity-50 hover:opacity-80'
                     }`}
-                    style={{ backgroundColor: c.value, boxShadow: tracerColor === c.value ? `0 0 8px ${c.value}` : 'none' }}
+                    style={{ backgroundColor: c.value }}
                     title={c.name}
                   />
                 ))}
               </div>
             </div>
 
-            {/* Action buttons */}
-            <div className="flex gap-3 pt-1">
+            {/* Action buttons - slim inline */}
+            <div className="flex gap-2 pt-1">
               <button
                 onClick={onReset}
-                className="flex-1 py-2.5 rounded-xl bg-neutral-800 text-white text-sm font-medium hover:bg-neutral-700 transition-colors touch-target"
+                className="flex-1 py-1.5 rounded-lg bg-white/5 text-white/70 text-[11px] font-medium hover:bg-white/10 transition-colors"
                 style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
               >
-                Start Over
+                Reset
               </button>
               <button
                 onClick={() => setIsEditMode(false)}
-                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#FFD700] to-[#FF4500] text-black text-sm font-semibold hover:opacity-90 transition-opacity touch-target"
+                className="flex-1 py-1.5 rounded-lg bg-[#FFD700] text-black text-[11px] font-semibold hover:bg-[#FFD700]/90 transition-colors"
                 style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
               >
-                Done Editing
+                Done
               </button>
             </div>
           </div>
@@ -577,30 +566,31 @@ export function TraceEditor({
         input[type="range"] {
           -webkit-appearance: none;
           appearance: none;
-          background: #262626;
+          background: #1a1a1a;
           border-radius: 9999px;
+          height: 4px;
         }
 
         input[type="range"]::-webkit-slider-thumb {
           -webkit-appearance: none;
           appearance: none;
-          width: 20px;
-          height: 20px;
+          width: 14px;
+          height: 14px;
           border-radius: 50%;
           background: #FFD700;
           cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+          border: none;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         }
 
         input[type="range"]::-moz-range-thumb {
-          width: 20px;
-          height: 20px;
+          width: 14px;
+          height: 14px;
           border-radius: 50%;
           background: #FFD700;
           cursor: pointer;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+          border: none;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         }
       `}</style>
     </>
