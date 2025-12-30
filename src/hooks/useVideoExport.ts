@@ -42,12 +42,27 @@ export function useVideoExport(): UseVideoExportReturn {
     abortRef.current = new AbortController()
 
     try {
+      // Check file size - warn if large
+      const fileSizeMB = videoFile.size / (1024 * 1024)
+      if (fileSizeMB > 100) {
+        throw new Error(`Video file is too large (${Math.round(fileSizeMB)}MB). Please use a shorter clip or lower resolution video (under 100MB).`)
+      }
+
       // Convert video to base64
-      setProgress(0.1)
+      setProgress(0.05)
       const videoBuffer = await videoFile.arrayBuffer()
-      const videoBase64 = btoa(
-        new Uint8Array(videoBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      )
+
+      // Convert to base64 in chunks to avoid memory issues
+      const bytes = new Uint8Array(videoBuffer)
+      let videoBase64 = ''
+      const chunkSize = 32768
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
+        videoBase64 += String.fromCharCode.apply(null, Array.from(chunk))
+        // Update progress during encoding
+        setProgress(0.05 + (i / bytes.length) * 0.15)
+      }
+      videoBase64 = btoa(videoBase64)
       setProgress(0.2)
 
       // Prepare request payload

@@ -17,7 +17,8 @@ image = (
 
 @app.function(
     image=image,
-    timeout=600,  # 10 minute timeout for longer videos
+    timeout=900,  # 15 minute timeout for longer videos
+    memory=4096,  # 4GB RAM for large videos
 )
 @modal.web_endpoint(method="POST")
 def render_video(data: dict):
@@ -69,9 +70,16 @@ def render_video(data: dict):
         line_width = style.get("lineWidth", 4)
         glow_intensity = style.get("glowIntensity", 10)
 
+        # Adaptive supersampling - reduce for longer videos to save time/memory
+        if total_frames > 600:  # > 10 seconds at 60fps
+            scale = 2
+        elif total_frames > 300:  # > 5 seconds
+            scale = 3
+        else:
+            scale = 4
+
         for frame_idx in range(total_frames):
             # Create transparent image (higher res for anti-aliasing)
-            scale = 4  # Render at 4x for smoother lines
             img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 

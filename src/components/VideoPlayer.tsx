@@ -171,9 +171,18 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
         src={videoUrl}
         className="max-w-full max-h-full"
         playsInline
+        webkit-playsinline="true"
         muted
+        preload="auto"
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
+        onLoadedData={() => {
+          // Force a render on iOS by seeking to start
+          const video = videoRef.current
+          if (video) {
+            video.currentTime = 0.001
+          }
+        }}
       />
 
       {/* Tracer overlay canvas */}

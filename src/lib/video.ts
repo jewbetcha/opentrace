@@ -5,18 +5,30 @@ export async function loadVideo(file: File): Promise<HTMLVideoElement> {
     const video = document.createElement('video')
     video.muted = true
     video.playsInline = true
+    video.setAttribute('webkit-playsinline', 'true')
+    video.preload = 'auto'
 
     const url = URL.createObjectURL(file)
     video.src = url
 
-    video.onloadedmetadata = () => {
+    video.onloadeddata = () => {
+      // Force render on iOS by seeking slightly
+      video.currentTime = 0.001
       resolve(video)
+    }
+
+    video.onloadedmetadata = () => {
+      // Also try to load the actual data
+      video.load()
     }
 
     video.onerror = () => {
       URL.revokeObjectURL(url)
       reject(new Error('Failed to load video'))
     }
+
+    // Explicitly load the video
+    video.load()
   })
 }
 
