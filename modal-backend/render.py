@@ -18,8 +18,8 @@ image = (
 @app.function(
     image=image,
     timeout=900,  # 15 minute timeout for longer videos
-    memory=8192,  # 8GB RAM for large videos
-    cpu=4,  # More CPU cores for faster processing
+    memory=16384,  # 16GB RAM for large videos
+    cpu=8,  # More CPU cores for faster processing
 )
 @modal.fastapi_endpoint(method="POST")
 def render_video(data: dict):
