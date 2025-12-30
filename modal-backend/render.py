@@ -71,7 +71,7 @@ def render_video(data: dict):
 
         for frame_idx in range(total_frames):
             # Create transparent image (higher res for anti-aliasing)
-            scale = 2  # Render at 2x for smoother lines
+            scale = 4  # Render at 4x for smoother lines
             img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
@@ -105,7 +105,7 @@ def render_video(data: dict):
                     img = Image.alpha_composite(img, glow_img)
                     draw = ImageDraw.Draw(img)
 
-                # Draw main tracer lines
+                # Draw main tracer lines with soft edges (multiple passes)
                 for i in range(1, len(visible_points)):
                     p1 = visible_points[i - 1]
                     p2 = visible_points[i]
@@ -115,24 +115,46 @@ def render_video(data: dict):
                     color = interpolate_color(style["startColor"], style["endColor"], t)
 
                     # Line width tapers
-                    current_width = int(line_width * (1 - t * 0.3) * scale)
-                    current_width = max(2, current_width)
+                    base_width = line_width * (1 - t * 0.3) * scale
 
-                    # Draw line
+                    # Draw multiple passes for softer anti-aliased edges
+                    # Outer soft edge
+                    outer_color = color[:3] + (80,)
+                    draw.line(
+                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                        fill=outer_color,
+                        width=int(base_width * 1.5)
+                    )
+
+                    # Middle layer
+                    mid_color = color[:3] + (180,)
+                    draw.line(
+                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                        fill=mid_color,
+                        width=int(base_width * 1.2)
+                    )
+
+                    # Core line (full opacity)
                     draw.line(
                         [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
                         fill=color,
-                        width=current_width
+                        width=int(base_width)
                     )
 
                     # Draw circles at joints for smoother connections
-                    if i < len(visible_points) - 1:
-                        radius = current_width // 2
-                        draw.ellipse(
-                            [p2["x"] * scale - radius, p2["y"] * scale - radius,
-                             p2["x"] * scale + radius, p2["y"] * scale + radius],
-                            fill=color
-                        )
+                    radius = int(base_width * 0.6)
+                    # Outer circle
+                    draw.ellipse(
+                        [p2["x"] * scale - radius * 1.3, p2["y"] * scale - radius * 1.3,
+                         p2["x"] * scale + radius * 1.3, p2["y"] * scale + radius * 1.3],
+                        fill=outer_color
+                    )
+                    # Inner circle
+                    draw.ellipse(
+                        [p2["x"] * scale - radius, p2["y"] * scale - radius,
+                         p2["x"] * scale + radius, p2["y"] * scale + radius],
+                        fill=color
+                    )
 
             # Downscale for anti-aliasing effect
             img = img.resize((width, height), Image.LANCZOS)
