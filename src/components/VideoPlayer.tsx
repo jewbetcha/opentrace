@@ -37,11 +37,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationRef = useRef<number>(0)
-  const hasInitializedRef = useRef(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const [totalFrames, setTotalFrames] = useState(0)
   const [showControls, setShowControls] = useState(true)
+  const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 })
   const controlsTimeoutRef = useRef<number>()
 
   // Expose methods to parent
@@ -61,13 +61,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
 
     const handleLoaded = () => {
       setTotalFrames(Math.floor(video.duration * fps))
+      setVideoDimensions({ width: video.videoWidth, height: video.videoHeight })
     }
 
     video.addEventListener('loadedmetadata', handleLoaded)
     return () => video.removeEventListener('loadedmetadata', handleLoaded)
   }, [fps])
 
-  // Smooth animation loop for tracer rendering
+  // Render loop - draw video frame + tracer to canvas
   useEffect(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
@@ -86,15 +87,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
 
       // Update canvas size if needed
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
+        canvas.width = video.videoWidth || 1920
+        canvas.height = video.videoHeight || 1080
       }
 
-      // Clear and draw tracer
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      // Draw video frame to canvas (this works reliably on iOS)
+      if (video.readyState >= 2) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      }
+
+      // Draw tracer overlay
       if (points.length > 0) {
-        // Show full trajectory only when paused and showFullTracer is enabled (editing mode)
-        // During playback, always animate the tracer with the video
         const tracerFrame = (showFullTracer && video.paused)
           ? points[points.length - 1].frameIndex
           : frame
@@ -166,37 +169,28 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       onTouchStart={handleInteraction}
       onMouseMove={handleInteraction}
     >
-      {/* Video element */}
+      {/* Hidden video element - used for playback control only */}
       <video
         ref={videoRef}
         src={videoUrl}
-        className="absolute inset-0 w-full h-full object-contain"
+        className="hidden"
         playsInline
         webkit-playsinline="true"
         muted
         preload="auto"
-        onLoadedData={() => {
-          // Force render on iOS by play/pause
-          const video = videoRef.current
-          if (video && !hasInitializedRef.current) {
-            hasInitializedRef.current = true
-            video.play().then(() => {
-              video.pause()
-              video.currentTime = 0
-            }).catch(() => {
-              // Autoplay blocked, just seek
-              video.currentTime = 0.001
-            })
-          }
-        }}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
       />
 
-      {/* Tracer overlay canvas */}
+      {/* Canvas shows video + tracer - this works reliably on iOS */}
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+        className="max-w-full max-h-full object-contain"
+        style={{
+          aspectRatio: videoDimensions.width && videoDimensions.height
+            ? `${videoDimensions.width} / ${videoDimensions.height}`
+            : 'auto'
+        }}
       />
 
       {/* Editor overlay slot */}
