@@ -20,6 +20,66 @@ export async function loadVideo(file: File): Promise<HTMLVideoElement> {
   })
 }
 
+// Detect video FPS by analyzing frame timestamps
+async function detectVideoFps(video: HTMLVideoElement): Promise<number> {
+  // Try to use requestVideoFrameCallback if available (Chrome/Edge)
+  if ('requestVideoFrameCallback' in video) {
+    return new Promise((resolve) => {
+      const frameTimestamps: number[] = []
+      let frameCount = 0
+      const maxFrames = 10
+
+      const captureFrame = (_now: number, metadata: { mediaTime: number }) => {
+        frameTimestamps.push(metadata.mediaTime)
+        frameCount++
+
+        if (frameCount < maxFrames && video.currentTime < video.duration - 0.5) {
+          (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: typeof captureFrame) => void })
+            .requestVideoFrameCallback(captureFrame)
+        } else {
+          video.pause()
+          video.currentTime = 0
+
+          // Calculate FPS from timestamps
+          if (frameTimestamps.length >= 2) {
+            const intervals: number[] = []
+            for (let i = 1; i < frameTimestamps.length; i++) {
+              intervals.push(frameTimestamps[i] - frameTimestamps[i - 1])
+            }
+            const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
+            const detectedFps = Math.round(1 / avgInterval)
+            // Snap to common framerates
+            const commonFps = [24, 25, 30, 48, 50, 60, 120, 240]
+            const closest = commonFps.reduce((prev, curr) =>
+              Math.abs(curr - detectedFps) < Math.abs(prev - detectedFps) ? curr : prev
+            )
+            resolve(closest)
+          } else {
+            resolve(60) // Fallback - assume 60fps for modern phones
+          }
+        }
+      }
+
+      video.currentTime = 0
+      video.play().then(() => {
+        (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: typeof captureFrame) => void })
+          .requestVideoFrameCallback(captureFrame)
+      }).catch(() => resolve(60))
+
+      // Timeout fallback
+      setTimeout(() => {
+        video.pause()
+        video.currentTime = 0
+        resolve(60)
+      }, 2000)
+    })
+  }
+
+  // Fallback: assume 60fps for modern phone videos
+  // Most modern phone videos are recorded at 60fps
+  return 60
+}
+
 export async function getVideoMetadata(video: HTMLVideoElement): Promise<VideoMetadata> {
   await new Promise<void>((resolve) => {
     if (video.readyState >= 1) {
@@ -29,7 +89,8 @@ export async function getVideoMetadata(video: HTMLVideoElement): Promise<VideoMe
     }
   })
 
-  const fps = 30
+  // Detect actual FPS
+  const fps = await detectVideoFps(video)
   const duration = video.duration
   const frameCount = Math.floor(duration * fps)
 

@@ -60,6 +60,8 @@ export function TraceEditor({
 
   // Control points for bezier curve
   const [controlPoints, setControlPoints] = useState<ControlPoint[]>([])
+  const hasInitializedRef = useRef(false)
+  const userHasEditedRef = useRef(false) // Track if user has made any edits
 
   // Params for sliders - initialize with passed ballSpeed
   const [params, setParams] = useState<TracerParams>(() => {
@@ -70,9 +72,9 @@ export function TraceEditor({
     }
   })
 
-  // Store start position and impact frame
-  const [startPos] = useState(() => points.length > 0 ? { x: points[0].x, y: points[0].y } : { x: 0, y: 0 })
-  const [impactFrame] = useState(() => points.length > 0 ? points[0].frameIndex : 0)
+  // Store start position and impact frame - derived from points prop
+  const startPos = points.length > 0 ? { x: points[0].x, y: points[0].y } : { x: 0, y: 0 }
+  const impactFrame = points.length > 0 ? points[0].frameIndex : 0
 
   const scale = Math.min(containerWidth / videoWidth, containerHeight / videoHeight)
   const offsetX = (containerWidth - videoWidth * scale) / 2
@@ -88,9 +90,10 @@ export function TraceEditor({
     y: (canvasY - offsetY) / scale
   }), [scale, offsetX, offsetY])
 
-  // Initialize control points from trajectory
+  // Initialize control points from trajectory (only once)
   useEffect(() => {
-    if (points.length < 3 || controlPoints.length > 0) return
+    if (points.length < 3 || hasInitializedRef.current) return
+    hasInitializedRef.current = true
 
     const endPoint = points[points.length - 1]
 
@@ -196,11 +199,15 @@ export function TraceEditor({
       })
     }
 
-    onPointsUpdate(newPoints)
-  }, [startPos, impactFrame, videoWidth, videoHeight, totalFrames, onPointsUpdate])
+    // Only update points if user has made edits (prevents overwriting original trajectory on mount)
+    if (userHasEditedRef.current) {
+      onPointsUpdate(newPoints)
+    }
+  }, [startPos.x, startPos.y, impactFrame, videoWidth, videoHeight, totalFrames, onPointsUpdate])
 
   // Handle slider changes - apply relative adjustments to preserve manual edits
   const handleParamChange = useCallback((key: keyof TracerParams, value: number) => {
+    userHasEditedRef.current = true // Mark that user has made edits
     const oldParams = params
     const newParams = { ...params, [key]: value }
     setParams(newParams)
@@ -293,6 +300,7 @@ export function TraceEditor({
   const handleMove = useCallback((e: TouchEvent | MouseEvent) => {
     if (!isDragging || !selectedControl) return
 
+    userHasEditedRef.current = true // Mark that user has made edits
     e.preventDefault()
     const coords = getEventCoords(e)
     if (!coords) return

@@ -105,7 +105,8 @@ export default function App() {
     setAppState({ type: 'exporting' })
 
     try {
-      await exportVideo(videoFile, video, points, metadata.fps, {
+      // Force 60fps for smooth export
+      await exportVideo(videoFile, video, points, 60, {
         startColor: tracerColor,
         endColor: tracerColor,
         lineWidth: 4,
