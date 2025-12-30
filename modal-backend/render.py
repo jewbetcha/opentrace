@@ -38,6 +38,10 @@ def render_video(data: dict):
     import base64
     from PIL import Image, ImageDraw, ImageFilter
     import io
+    import time
+
+    total_start = time.time()
+    print(f"[RENDER] Starting render job")
 
     video_base64 = data["video_base64"]
     points = data["points"]
@@ -53,14 +57,21 @@ def render_video(data: dict):
         "glowIntensity": 10
     })
 
+    print(f"[RENDER] Video: {width}x{height}, {duration:.2f}s, source_fps={source_fps}, output_fps={output_fps}")
+    print(f"[RENDER] Points: {len(points)} tracer points")
+    print(f"[RENDER] Input size: {len(video_base64) / 1024 / 1024:.2f} MB (base64)")
+
     # Calculate frame scaling factor
     fps_scale = output_fps / source_fps
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write input video
+        step_start = time.time()
         input_path = os.path.join(tmpdir, "input.mp4")
+        video_bytes = base64.b64decode(video_base64)
         with open(input_path, "wb") as f:
-            f.write(base64.b64decode(video_base64))
+            f.write(video_bytes)
+        print(f"[RENDER] Decoded and wrote input video: {len(video_bytes) / 1024 / 1024:.2f} MB in {time.time() - step_start:.2f}s")
 
         # Generate tracer overlay frames as transparent PNGs
         overlay_dir = os.path.join(tmpdir, "overlays")
@@ -78,7 +89,19 @@ def render_video(data: dict):
         else:
             scale = 4
 
+        print(f"[RENDER] Generating {total_frames} overlay frames at {scale}x supersampling")
+        frame_gen_start = time.time()
+        last_progress_log = 0
+
         for frame_idx in range(total_frames):
+            # Log progress every 10%
+            progress_pct = int((frame_idx / total_frames) * 100)
+            if progress_pct >= last_progress_log + 10:
+                elapsed = time.time() - frame_gen_start
+                fps_rate = frame_idx / elapsed if elapsed > 0 else 0
+                remaining = (total_frames - frame_idx) / fps_rate if fps_rate > 0 else 0
+                print(f"[RENDER] Frame generation: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} frames/sec, ~{remaining:.1f}s remaining")
+                last_progress_log = progress_pct
             # Create transparent image (higher res for anti-aliasing)
             img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
@@ -171,8 +194,12 @@ def render_video(data: dict):
             frame_path = os.path.join(overlay_dir, f"overlay{frame_idx:06d}.png")
             img.save(frame_path, "PNG")
 
+        frame_gen_elapsed = time.time() - frame_gen_start
+        print(f"[RENDER] Frame generation complete: {total_frames} frames in {frame_gen_elapsed:.2f}s ({total_frames/frame_gen_elapsed:.1f} fps)")
+
         # Use FFmpeg to composite overlay onto original video
         output_path = os.path.join(tmpdir, "output.mp4")
+        print(f"[RENDER] Starting FFmpeg compositing...")
 
         cmd = [
             "ffmpeg",
@@ -194,14 +221,29 @@ def render_video(data: dict):
             output_path
         ]
 
+        ffmpeg_start = time.time()
         result = subprocess.run(cmd, capture_output=True, text=True)
+        ffmpeg_elapsed = time.time() - ffmpeg_start
 
         if result.returncode != 0:
+            print(f"[RENDER] FFmpeg FAILED after {ffmpeg_elapsed:.2f}s")
+            print(f"[RENDER] FFmpeg stderr: {result.stderr}")
             return {"error": result.stderr}
 
+        print(f"[RENDER] FFmpeg complete in {ffmpeg_elapsed:.2f}s")
+
         # Read output and return as base64
+        encode_start = time.time()
         with open(output_path, "rb") as f:
-            output_base64 = base64.b64encode(f.read()).decode("utf-8")
+            output_bytes = f.read()
+        output_base64 = base64.b64encode(output_bytes).decode("utf-8")
+        encode_elapsed = time.time() - encode_start
+
+        output_size_mb = len(output_bytes) / 1024 / 1024
+        print(f"[RENDER] Output video: {output_size_mb:.2f} MB, encoded to base64 in {encode_elapsed:.2f}s")
+
+        total_elapsed = time.time() - total_start
+        print(f"[RENDER] COMPLETE - Total time: {total_elapsed:.2f}s")
 
         return {
             "success": True,

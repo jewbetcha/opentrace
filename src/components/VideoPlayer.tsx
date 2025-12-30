@@ -42,6 +42,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   const [totalFrames, setTotalFrames] = useState(0)
   const [showControls, setShowControls] = useState(true)
   const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 })
+  const [videoReady, setVideoReady] = useState(false)
   const controlsTimeoutRef = useRef<number>()
 
   // Expose methods to parent
@@ -55,24 +56,55 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
     }
   }), [currentFrame, fps])
 
+  // Initialize video - iOS requires special handling to decode first frame
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
-    const handleLoaded = () => {
+    setVideoReady(false)
+
+    const initializeVideo = async () => {
+      // Wait for metadata
+      if (video.readyState < 1) {
+        await new Promise<void>(resolve => {
+          const onLoaded = () => {
+            video.removeEventListener('loadedmetadata', onLoaded)
+            resolve()
+          }
+          video.addEventListener('loadedmetadata', onLoaded)
+        })
+      }
+
       setTotalFrames(Math.floor(video.duration * fps))
       setVideoDimensions({ width: video.videoWidth, height: video.videoHeight })
+
+      // iOS Safari requires play/pause to decode the first frame
+      // This is a well-known workaround for iOS video rendering
+      try {
+        video.currentTime = 0.001
+        await video.play()
+        video.pause()
+        video.currentTime = 0
+      } catch {
+        // Play failed (expected on some browsers), but video should still work
+        video.currentTime = 0
+      }
+
+      // Wait a frame for iOS to process
+      await new Promise(resolve => setTimeout(resolve, 100))
+
+      setVideoReady(true)
     }
 
-    video.addEventListener('loadedmetadata', handleLoaded)
-    return () => video.removeEventListener('loadedmetadata', handleLoaded)
-  }, [fps])
+    video.load()
+    initializeVideo()
+  }, [fps, videoUrl])
 
   // Render loop - draw video frame + tracer to canvas
   useEffect(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
-    if (!video || !canvas) return
+    if (!video || !canvas || !videoReady) return
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
@@ -114,7 +146,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [fps, points, tracerStyle, onFrameChange, currentFrame, showFullTracer])
+  }, [fps, points, tracerStyle, onFrameChange, currentFrame, showFullTracer, videoReady])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
@@ -185,13 +217,21 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       {/* Canvas shows video + tracer - this works reliably on iOS */}
       <canvas
         ref={canvasRef}
-        className="max-w-full max-h-full object-contain"
+        className={`max-w-full max-h-full object-contain ${videoReady ? '' : 'hidden'}`}
         style={{
           aspectRatio: videoDimensions.width && videoDimensions.height
             ? `${videoDimensions.width} / ${videoDimensions.height}`
             : 'auto'
         }}
       />
+
+      {/* Loading indicator while video initializes */}
+      {!videoReady && (
+        <div className="flex flex-col items-center justify-center gap-3">
+          <div className="w-10 h-10 border-4 border-[#FFD700] border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-neutral-400">Loading video...</p>
+        </div>
+      )}
 
       {/* Editor overlay slot */}
       {children}
