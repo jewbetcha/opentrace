@@ -129,8 +129,8 @@ export default function App() {
         lineWidth: 4,
         glowIntensity: 10
       })
-      // Success!
-      showToast('success', 'Video saved! Check your camera roll.')
+      // Success! On iOS, file goes to Downloads in Files app
+      showToast('success', 'Video saved to Downloads!')
       setAppState({ type: 'editing' })
     } catch (err) {
       console.error('Export failed:', err)

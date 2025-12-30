@@ -18,7 +18,7 @@ image = (
 @app.function(
     image=image,
     timeout=900,  # 15 minute timeout for longer videos
-    memory=16384,  # 16GB RAM for large videos
+    memory=32768,  # 32GB RAM - maximum for standard instances
     cpu=8,  # More CPU cores for faster processing
 )
 @modal.fastapi_endpoint(method="POST")

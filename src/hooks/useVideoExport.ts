@@ -132,25 +132,9 @@ export function useVideoExport(): UseVideoExportReturn {
       }
       const outputBlob = new Blob([outputArray], { type: 'video/mp4' })
 
-      // Try Web Share API first (saves to camera roll on mobile)
-      const file = new File([outputBlob], 'traced-shot.mp4', { type: 'video/mp4' })
-
-      if (navigator.canShare?.({ files: [file] })) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: 'Traced Shot',
-          })
-        } catch (shareErr) {
-          // User cancelled share or share failed - fall back to download
-          if ((shareErr as Error).name !== 'AbortError') {
-            downloadFile(outputBlob)
-          }
-        }
-      } else {
-        // Fallback for desktop or browsers without Web Share API
-        downloadFile(outputBlob)
-      }
+      // Download the file directly
+      // Note: On iOS, this saves to Files app. User can then save to Photos from there.
+      downloadFile(outputBlob)
 
       setProgress(1)
     } catch (err) {
