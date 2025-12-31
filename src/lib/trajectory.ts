@@ -145,3 +145,168 @@ export function interpolatePoints(points: TrackPoint[], numPoints: number): Trac
 
   return result
 }
+
+
+// =============================================================================
+// TRACKMAN-STYLE CUBIC BEZIER TRAJECTORY
+// =============================================================================
+//
+// Key characteristics from real Trackman:
+// - Rise is nearly STRAIGHT (bullet-like trajectory)
+// - Apex is SHARP (distinct peak)
+// - Fall is STEEP and SHORT (drops almost vertically)
+// - Apex occurs at ~80% of horizontal distance
+
+export interface Point2D {
+  x: number
+  y: number
+}
+
+export interface BezierControlPoints {
+  p0: Point2D  // Start
+  p1: Point2D  // Launch control
+  p2: Point2D  // Descent control
+  p3: Point2D  // End
+}
+
+// === TRACKMAN CONSTANTS ===
+// Centralized so all components use the same values
+export const TRACKMAN = {
+  APEX_X_RATIO: 0.80,           // Apex at 80% of horizontal distance
+  LAUNCH_FACTOR_BASE: 0.55,     // Base launch factor
+  LAUNCH_FACTOR_HANGTIME: 0.35, // Hangtime contribution (bumped up for more effect)
+  DESCENT_X_RATIO: 0.95,        // P2 at 95% horizontal (very close to end)
+  CURVE_FACTOR_P1: 0.03,        // Curve effect on launch control
+  CURVE_FACTOR_P2: 0.05,        // Curve effect on descent control
+}
+
+export interface TrackmanParams {
+  startX: number
+  startY: number
+  endX: number
+  endY: number
+  peakHeight: number    // 0-1, affects apex height
+  curve: number         // -1 to 1, draw/fade
+  hangtime: number      // 0-1, affects launch angle and hang at apex
+  videoWidth: number
+  videoHeight: number
+}
+
+/**
+ * Calculate Trackman-style cubic Bezier control points
+ */
+export function calculateTrackmanControlPoints(params: TrackmanParams): BezierControlPoints {
+  const { startX, startY, endX, endY, peakHeight, curve, hangtime, videoWidth, videoHeight } = params
+
+  const dx = endX - startX
+
+  // Apex height in screen coords (up is negative Y)
+  const apexHeight = peakHeight * videoHeight
+  const apexY = Math.min(startY, endY) - apexHeight
+
+  // Apex occurs at 80% of horizontal distance (Trackman style)
+  const apexX = startX + dx * TRACKMAN.APEX_X_RATIO
+
+  // P0: Start
+  const p0 = { x: startX, y: startY }
+
+  // P3: End
+  const p3 = { x: endX, y: endY }
+
+  // P1: Launch control - MUST use same factor for x and y for straight trajectory
+  // launchFactor range: 0.55 to 0.90 based on hangtime
+  const launchFactor = TRACKMAN.LAUNCH_FACTOR_BASE + hangtime * TRACKMAN.LAUNCH_FACTOR_HANGTIME
+  const p1 = {
+    x: startX + (apexX - startX) * launchFactor + curve * videoWidth * TRACKMAN.CURVE_FACTOR_P1,
+    y: startY - apexHeight * launchFactor  // Same factor = straight line toward apex
+  }
+
+  // P2: Descent control - very close to end horizontally, but at apex height
+  // This creates the sharp peak and steep drop
+  const p2 = {
+    x: startX + dx * TRACKMAN.DESCENT_X_RATIO + curve * videoWidth * TRACKMAN.CURVE_FACTOR_P2,
+    y: apexY  // At apex height = sharp corner before dropping
+  }
+
+  return { p0, p1, p2, p3 }
+}
+
+/**
+ * Evaluate cubic Bezier curve at parameter t
+ * B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
+ */
+export function evaluateBezier(t: number, cp: BezierControlPoints): Point2D {
+  const { p0, p1, p2, p3 } = cp
+  const u = 1 - t
+  const u2 = u * u
+  const u3 = u2 * u
+  const t2 = t * t
+  const t3 = t2 * t
+
+  return {
+    x: u3 * p0.x + 3 * u2 * t * p1.x + 3 * u * t2 * p2.x + t3 * p3.x,
+    y: u3 * p0.y + 3 * u2 * t * p1.y + 3 * u * t2 * p2.y + t3 * p3.y
+  }
+}
+
+/**
+ * Generate a full trajectory as an array of points
+ */
+export function generateBezierPoints(cp: BezierControlPoints, numPoints: number = 60): Point2D[] {
+  const points: Point2D[] = []
+  for (let i = 0; i <= numPoints; i++) {
+    const t = i / numPoints
+    points.push(evaluateBezier(t, cp))
+  }
+  return points
+}
+
+/**
+ * Calculate physics-based frame timing for animation
+ * Returns the t parameter for the Bezier curve based on frame index
+ */
+export function calculateBezierT(
+  frameIndex: number,
+  riseFrames: number,
+  apexFrames: number,
+  fallFrames: number
+): number {
+  if (frameIndex <= riseFrames) {
+    // Rise phase: t = 0 to 0.45
+    const riseProgress = frameIndex / riseFrames
+    return riseProgress * 0.45
+  } else if (frameIndex <= riseFrames + apexFrames) {
+    // Apex phase: t = 0.45 to 0.60
+    const apexProgress = (frameIndex - riseFrames) / Math.max(1, apexFrames)
+    return 0.45 + apexProgress * 0.15
+  } else {
+    // Fall phase: t = 0.60 to 1.0
+    const fallProgress = (frameIndex - riseFrames - apexFrames) / fallFrames
+    return 0.60 + fallProgress * 0.40
+  }
+}
+
+/**
+ * Calculate frame counts based on physics
+ */
+export function calculateFlightFrames(
+  startY: number,
+  apexY: number,
+  endY: number,
+  ballSpeed: number,
+  hangtime: number
+): { riseFrames: number; apexFrames: number; fallFrames: number; totalFrames: number } {
+  const BASE_RISE_FRAMES = 45
+  const HANGTIME_FRAMES = 30
+  const GRAVITY_SCALE = 12
+
+  const rise = Math.max(10, startY - apexY)
+  const fall = Math.max(10, endY - apexY)
+
+  const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(rise / 100)))
+  const apexFrames = Math.round(hangtime * HANGTIME_FRAMES)
+  const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
+  const totalFrames = riseFrames + apexFrames + fallFrames
+
+  return { riseFrames, apexFrames, fallFrames, totalFrames }
+}

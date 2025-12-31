@@ -1,5 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import type { TrackPoint } from '../types'
+import {
+  TRACKMAN,
+  evaluateBezier,
+  calculateBezierT,
+  calculateFlightFrames,
+  type BezierControlPoints
+} from '../lib/trajectory'
 
 interface ControlPoint {
   id: 'controlUp' | 'controlDown' | 'end'
@@ -92,7 +99,7 @@ export function TraceEditor({
     y: (canvasY - offsetY) / scale
   }), [scale, offsetX, offsetY])
 
-  // Initialize control points from trajectory (only once)
+  // Initialize control points from trajectory using Gemini-style positioning
   useEffect(() => {
     if (points.length < 3 || hasInitializedRef.current) return
     hasInitializedRef.current = true
@@ -100,116 +107,89 @@ export function TraceEditor({
     const endPoint = points[points.length - 1]
 
     // Find the peak (highest point - lowest Y value)
-    let peakIdx = 0
     let minY = Infinity
     for (let i = 0; i < points.length; i++) {
       if (points[i].y < minY) {
         minY = points[i].y
-        peakIdx = i
       }
     }
 
-    // Place control points at ~30% and ~70% of trajectory for tighter curve control
-    // These sit closer to the actual trajectory path
-    const upIdx = Math.floor(peakIdx * 0.6)  // 60% of way to peak
-    const upPoint = points[upIdx] || points[Math.floor(points.length * 0.3)]
+    // === TRACKMAN-STYLE CONTROL POINT POSITIONING ===
+    // Uses shared TRACKMAN constants for consistency
+    const dx = endPoint.x - startPos.x
+    const apexHeight = startPos.y - minY
+    const apexY = minY
+    const apexX = startPos.x + dx * TRACKMAN.APEX_X_RATIO
 
-    const downIdx = peakIdx + Math.floor((points.length - 1 - peakIdx) * 0.4)  // 40% into descent
-    const downPoint = points[downIdx] || points[Math.floor(points.length * 0.7)]
+    // P1: Launch control - MUST use same factor for x and y to create straight trajectory
+    const launchFactor = TRACKMAN.LAUNCH_FACTOR_BASE + params.hangtime * TRACKMAN.LAUNCH_FACTOR_HANGTIME
+    const p1 = {
+      x: startPos.x + (apexX - startPos.x) * launchFactor,
+      y: startPos.y - apexHeight * launchFactor  // Same factor = straight line toward apex
+    }
+
+    // P2: Descent control - very close to end horizontally, but at apex height for steep drop
+    const p2 = {
+      x: startPos.x + dx * TRACKMAN.DESCENT_X_RATIO,
+      y: apexY  // At apex height = sharp corner before dropping
+    }
 
     setControlPoints([
-      { id: 'controlUp', x: upPoint.x, y: upPoint.y, label: 'Rise' },
-      { id: 'controlDown', x: downPoint.x, y: downPoint.y, label: 'Fall' },
+      { id: 'controlUp', x: p1.x, y: p1.y, label: 'Launch' },
+      { id: 'controlDown', x: p2.x, y: p2.y, label: 'Descent' },
       { id: 'end', x: endPoint.x, y: endPoint.y, label: 'Landing' }
     ])
-  }, [points])
+  }, [points, startPos.x, startPos.y, params.hangtime])
 
-  // Regenerate trajectory from control points using cubic Bezier for shape, physics for timing
+  // Regenerate trajectory from control points using cubic Bezier
   const regenerateFromControlPoints = useCallback((controls: ControlPoint[], ballSpeed: number, hangtime: number) => {
     if (controls.length < 3) return
 
     const controlUp = controls.find(c => c.id === 'controlUp')!
     const controlDown = controls.find(c => c.id === 'controlDown')!
-    const endPoint = controls.find(c => c.id === 'end')!
+    const endPointCtrl = controls.find(c => c.id === 'end')!
 
-    // Calculate apex height from control points for physics timing
-    const apexY = Math.min(controlUp.y, controlDown.y)
-    const rise = Math.max(10, startPos.y - apexY)
-    const fall = Math.max(10, endPoint.y - apexY)
+    // Build control points structure for shared functions
+    const cp: BezierControlPoints = {
+      p0: { x: startPos.x, y: startPos.y },
+      p1: { x: controlUp.x, y: controlUp.y },
+      p2: { x: controlDown.x, y: controlDown.y },
+      p3: { x: endPointCtrl.x, y: endPointCtrl.y }
+    }
 
-    // PHYSICS-BASED FRAME CALCULATION
-    // Ball speed affects RISE phase only (faster ball = fewer frames to apex)
-    // Hangtime affects how long ball stays near apex
-    // Fall is purely gravity (constant, determined by fall height)
-    const BASE_RISE_FRAMES = 45
-    const HANGTIME_FRAMES = 40  // Max frames at apex
-    const GRAVITY_SCALE = 12
+    // Calculate apex height for physics timing
+    const apexY = Math.min(cp.p1.y, cp.p2.y)
 
-    // Speed affects rise only
-    const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(rise / 100)))
-    // Hangtime adds frames at the apex
-    const apexFrames = Math.round(hangtime * HANGTIME_FRAMES)
-    // Fall is constant gravity
-    const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
+    // Calculate physics-based frame counts using shared function
+    const { riseFrames, apexFrames, fallFrames, totalFrames: flightTotal } = calculateFlightFrames(
+      startPos.y, apexY, endPointCtrl.y, ballSpeed, hangtime
+    )
 
-    const totalFlightFrames = riseFrames + apexFrames + fallFrames
     const maxFrames = totalFrames - impactFrame - 1
-    const flightFrames = Math.min(totalFlightFrames, maxFrames)
+    const flightFrames = Math.min(flightTotal, maxFrames)
 
     const newPoints: TrackPoint[] = []
-
-    // Curve timing: rise takes us to ~0.45, apex hangs around 0.45-0.55, fall takes us to 1
-    const riseT = 0.45  // Where on the bezier curve the apex is
-    const fallT = 0.55
 
     for (let i = 0; i <= flightFrames; i++) {
       const frameIndex = impactFrame + i
       if (frameIndex >= totalFrames) break
 
-      // Map frame time to curve position with three phases
-      let curveT: number
-      if (i <= riseFrames) {
-        // Rising phase - ball speed affects this
-        const riseProgress = i / riseFrames
-        curveT = riseProgress * riseT
-      } else if (i <= riseFrames + apexFrames) {
-        // Apex phase - hangtime keeps ball near top
-        const apexProgress = (i - riseFrames) / Math.max(1, apexFrames)
-        curveT = riseT + apexProgress * (fallT - riseT)
-      } else {
-        // Fall phase - gravity only
-        const fallProgress = (i - riseFrames - apexFrames) / fallFrames
-        curveT = fallT + fallProgress * (1 - fallT)
-      }
-      curveT = Math.min(1, Math.max(0, curveT))
+      // Use shared function for physics-based timing
+      const t = Math.min(1, Math.max(0, calculateBezierT(i, riseFrames, apexFrames, fallFrames)))
 
-      // Cubic Bezier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
-      const u = 1 - curveT
-      const u2 = u * u
-      const u3 = u2 * u
-      const ct2 = curveT * curveT
-      const ct3 = ct2 * curveT
-
-      const x = u3 * startPos.x +
-                3 * u2 * curveT * controlUp.x +
-                3 * u * ct2 * controlDown.x +
-                ct3 * endPoint.x
-
-      const y = u3 * startPos.y +
-                3 * u2 * curveT * controlUp.y +
-                3 * u * ct2 * controlDown.y +
-                ct3 * endPoint.y
+      // Evaluate Bezier using shared function
+      const point = evaluateBezier(t, cp)
 
       newPoints.push({
         frameIndex,
-        x: Math.max(0, Math.min(videoWidth, x)),
-        y: Math.max(0, Math.min(videoHeight, y)),
+        x: Math.max(0, Math.min(videoWidth, point.x)),
+        y: Math.max(0, Math.min(videoHeight, point.y)),
         confidence: 1,
         isEstimated: false
       })
     }
 
-    // Only update points if user has made edits (prevents overwriting original trajectory on mount)
+    // Only update points if user has made edits
     if (userHasEditedRef.current) {
       onPointsUpdate(newPoints)
     }
@@ -231,8 +211,8 @@ export function TraceEditor({
       const heightDelta = (newParams.peakHeight - oldParams.peakHeight) * videoHeight
       newControls = controlPoints.map(cp => {
         if (cp.id === 'end') return cp // Don't move landing point vertically
-        // Move control points up/down based on height change
-        const factor = cp.id === 'controlUp' ? 0.8 : 0.6
+        // P1 (launch) moves more, P2 (descent) moves less
+        const factor = cp.id === 'controlUp' ? 0.9 : 0.7
         return {
           ...cp,
           y: Math.max(0, Math.min(videoHeight, cp.y - heightDelta * factor))
@@ -240,20 +220,37 @@ export function TraceEditor({
       })
     } else if (key === 'curve') {
       // Adjust X positions based on curve change (draw/fade)
-      const curveDelta = (newParams.curve - oldParams.curve) * videoWidth * 0.15
+      // Uses shared TRACKMAN constants for consistency
       newControls = controlPoints.map(cp => {
         if (cp.id === 'end') return cp // Don't move landing point
+        const curveFactor = cp.id === 'controlUp' ? TRACKMAN.CURVE_FACTOR_P1 : TRACKMAN.CURVE_FACTOR_P2
+        const curveDelta = (newParams.curve - oldParams.curve) * videoWidth * curveFactor
         return {
           ...cp,
           x: Math.max(0, Math.min(videoWidth, cp.x + curveDelta))
         }
       })
+    } else if (key === 'hangtime') {
+      // Hangtime adjusts P1's height (affects launch angle/trajectory lift)
+      // Uses shared TRACKMAN constant for hangtime factor
+      const controlUp = controlPoints.find(c => c.id === 'controlUp')!
+      const apexHeight = startPos.y - Math.min(controlUp.y, controlPoints.find(c => c.id === 'controlDown')!.y)
+      const liftDelta = (newParams.hangtime - oldParams.hangtime) * apexHeight * TRACKMAN.LAUNCH_FACTOR_HANGTIME
+      newControls = controlPoints.map(cp => {
+        if (cp.id === 'controlUp') {
+          return {
+            ...cp,
+            y: Math.max(0, Math.min(videoHeight, cp.y - liftDelta))
+          }
+        }
+        return cp
+      })
     }
-    // For ballSpeed and hangtime, just regenerate with same control points (physics recalculates frames)
+    // For ballSpeed, just regenerate with same control points
 
     setControlPoints(newControls)
     regenerateFromControlPoints(newControls, newParams.ballSpeed, newParams.hangtime)
-  }, [params, controlPoints, videoWidth, videoHeight, regenerateFromControlPoints])
+  }, [params, controlPoints, videoWidth, videoHeight, startPos.y, regenerateFromControlPoints])
 
   const HIT_RADIUS = 40
 

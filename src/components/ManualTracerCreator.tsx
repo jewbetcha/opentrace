@@ -1,5 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { TrackPoint } from '../types'
+import {
+  calculateTrackmanControlPoints,
+  evaluateBezier,
+  generateBezierPoints,
+  calculateBezierT,
+  calculateFlightFrames
+} from '../lib/trajectory'
 
 interface ManualTracerCreatorProps {
   videoWidth: number
@@ -74,76 +81,40 @@ export function ManualTracerCreator({
     const points: TrackPoint[] = []
     const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, hangtime, impactFrame } = params
 
-    // Calculate apex position (peak of trajectory)
-    const apexY = startY - peakHeight * videoHeight  // Screen coords: up is negative Y
+    // Calculate control points using shared Trackman function
+    const cp = calculateTrackmanControlPoints({
+      startX, startY, endX, endY,
+      peakHeight, curve, hangtime,
+      videoWidth, videoHeight
+    })
 
-    // Heights for physics calculations (in screen coords, positive values)
-    const rise = startY - apexY  // Height from start to apex
-    const fall = endY - apexY    // Height from apex to end
+    // Calculate apex Y for physics timing
+    const apexHeight = peakHeight * videoHeight
+    const apexY = Math.min(startY, endY) - apexHeight
 
-    // PHYSICS-BASED FRAME CALCULATION
-    // Ball speed affects RISE phase only (faster ball = fewer frames to apex)
-    // Hangtime affects how long ball stays near apex
-    // Fall is purely gravity (constant, determined by fall height)
-    const BASE_RISE_FRAMES = 45
-    const HANGTIME_FRAMES = 40  // Max frames at apex
-    const GRAVITY_SCALE = 12
+    // Calculate physics-based frame counts
+    const { riseFrames, apexFrames, fallFrames, totalFrames: flightTotal } = calculateFlightFrames(
+      startY, apexY, endY, ballSpeed, hangtime
+    )
 
-    // Speed affects rise only
-    const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(Math.max(10, rise) / 100)))
-    // Hangtime adds frames at the apex
-    const apexFrames = Math.round(hangtime * HANGTIME_FRAMES)
-    // Fall is constant gravity
-    const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(Math.max(10, fall) / 100)))
-
-    const totalFlightFrames = riseFrames + apexFrames + fallFrames
     const maxFrames = totalFrames - impactFrame - 1
-    const flightFrames = Math.min(totalFlightFrames, maxFrames)
+    const flightFrames = Math.min(flightTotal, maxFrames)
 
-    // Curve timing: rise takes us to ~0.45, apex hangs around 0.45-0.55, fall takes us to 1
-    const riseT = 0.45
-    const fallT = 0.55
-
-    // Generate trajectory points
+    // Generate trajectory using cubic Bezier with physics timing
     for (let i = 0; i <= flightFrames; i++) {
       const frameIndex = impactFrame + i
       if (frameIndex >= totalFrames) break
 
-      // Map frame time to curve position with three phases
-      let t: number
-      if (i <= riseFrames) {
-        // Rising phase - ball speed affects this
-        const riseProgress = i / riseFrames
-        t = riseProgress * riseT
-      } else if (i <= riseFrames + apexFrames) {
-        // Apex phase - hangtime keeps ball near top
-        const apexProgress = (i - riseFrames) / Math.max(1, apexFrames)
-        t = riseT + apexProgress * (fallT - riseT)
-      } else {
-        // Fall phase - gravity only
-        const fallProgress = (i - riseFrames - apexFrames) / fallFrames
-        t = fallT + fallProgress * (1 - fallT)
-      }
-      t = Math.min(1, Math.max(0, t))
+      // Get t parameter with physics-based timing
+      const t = Math.min(1, Math.max(0, calculateBezierT(i, riseFrames, apexFrames, fallFrames)))
 
-      // X: Linear motion (constant horizontal velocity throughout flight)
-      let x = startX + (endX - startX) * t
-
-      // Y: Quadratic parabola through start, apex, end
-      const dy = endY - startY
-      const A = (-rise - dy * riseT) / (riseT * (riseT - 1))
-      const B = dy - A
-      const C = startY
-      let y = A * t * t + B * t + C
-
-      // Add draw/fade curve offset (sine curve for side spin effect)
-      const curveOffset = Math.sin(t * Math.PI) * curve * videoWidth * 0.2
-      x += curveOffset
+      // Evaluate Bezier curve at t
+      const point = evaluateBezier(t, cp)
 
       points.push({
         frameIndex,
-        x: Math.max(0, Math.min(videoWidth, x)),
-        y: Math.max(0, Math.min(videoHeight, y)),
+        x: Math.max(0, Math.min(videoWidth, point.x)),
+        y: Math.max(0, Math.min(videoHeight, point.y)),
         confidence: 1,
         isEstimated: false
       })
@@ -182,46 +153,17 @@ export function ManualTracerCreator({
 
     // Draw trajectory when in adjust mode (both points are set)
     if (mode === 'adjust') {
-      const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, color } = params
+      const { startX, startY, endX, endY, peakHeight, curve, hangtime, color } = params
 
-      // Calculate apex position (same as generateTrajectory)
-      const apexY = startY - peakHeight * videoHeight
-      const rise = startY - apexY
-      const fall = endY - apexY
+      // Use shared Trackman function for control points
+      const cp = calculateTrackmanControlPoints({
+        startX, startY, endX, endY,
+        peakHeight, curve, hangtime,
+        videoWidth, videoHeight
+      })
 
-      // Physics-based frame calculation (same as generateTrajectory)
-      const BASE_RISE_FRAMES = 60
-      const GRAVITY_SCALE = 15
-      const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(Math.max(10, rise) / 100)))
-      const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(Math.max(10, fall) / 100)))
-      const totalFlightFrames = riseFrames + fallFrames
-      const maxFrames = totalFrames - params.impactFrame - 1
-      const flightFrames = Math.min(totalFlightFrames, maxFrames)
-
-      // Pre-calculate parabola coefficients
-      const apexT = riseFrames / totalFlightFrames
-      const dy = endY - startY
-      const A = (-rise - dy * apexT) / (apexT * (apexT - 1))
-      const B = dy - A
-      const C = startY
-
-      // Generate trajectory points for drawing (just positions, no frame scaling needed for preview)
-      const trajectoryPoints: { x: number; y: number }[] = []
-      for (let i = 0; i <= flightFrames; i++) {
-        const t = i / flightFrames
-
-        // X: Linear motion
-        let x = startX + (endX - startX) * t
-
-        // Y: Quadratic parabola
-        let y = A * t * t + B * t + C
-
-        // Add curve offset
-        const curveOffset = Math.sin(t * Math.PI) * curve * videoWidth * 0.2
-        x += curveOffset
-
-        trajectoryPoints.push({ x, y })
-      }
+      // Generate trajectory points using shared function
+      const trajectoryPoints = generateBezierPoints(cp, 60)
 
       // Draw trajectory
       if (trajectoryPoints.length > 1) {
