@@ -20,7 +20,8 @@ interface TracerParams {
   endY: number
   peakHeight: number
   curve: number
-  ballSpeed: number  // 0.5 to 2.0 multiplier (1.0 = normal)
+  ballSpeed: number  // affects rise phase only
+  hangtime: number   // 0-1, affects how long ball stays at apex
   impactFrame: number
   color: string
 }
@@ -56,7 +57,8 @@ export function ManualTracerCreator({
     endY: 0,
     peakHeight: 0.3,
     curve: 0,
-    ballSpeed: 1.0,  // 1.0 = normal speed
+    ballSpeed: 1.0,
+    hangtime: 0.3,  // Default moderate hangtime
     impactFrame: 0,
     color: '#3B82F6'
   })
@@ -70,7 +72,7 @@ export function ManualTracerCreator({
     if (!hasPoints && mode !== 'adjust') return []
 
     const points: TrackPoint[] = []
-    const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, impactFrame } = params
+    const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, hangtime, impactFrame } = params
 
     // Calculate apex position (peak of trajectory)
     const apexY = startY - peakHeight * videoHeight  // Screen coords: up is negative Y
@@ -80,38 +82,47 @@ export function ManualTracerCreator({
     const fall = endY - apexY    // Height from apex to end
 
     // PHYSICS-BASED FRAME CALCULATION
-    // Ball speed affects RISE phase (faster ball = fewer frames to reach apex)
+    // Ball speed affects RISE phase only (faster ball = fewer frames to apex)
+    // Hangtime affects how long ball stays near apex
     // Fall is purely gravity (constant, determined by fall height)
-    const BASE_RISE_FRAMES = 60
-    const GRAVITY_SCALE = 15  // Reduced so fall doesn't dominate
+    const BASE_RISE_FRAMES = 45
+    const HANGTIME_FRAMES = 40  // Max frames at apex
+    const GRAVITY_SCALE = 12
 
-    // Speed affects rise, fall is constant gravity
+    // Speed affects rise only
     const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(Math.max(10, rise) / 100)))
+    // Hangtime adds frames at the apex
+    const apexFrames = Math.round(hangtime * HANGTIME_FRAMES)
+    // Fall is constant gravity
     const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(Math.max(10, fall) / 100)))
 
-    const totalFlightFrames = riseFrames + fallFrames
+    const totalFlightFrames = riseFrames + apexFrames + fallFrames
     const maxFrames = totalFrames - impactFrame - 1
     const flightFrames = Math.min(totalFlightFrames, maxFrames)
 
-    // Apex position in normalized time
-    const apexT = riseFrames / totalFlightFrames
+    // Curve timing: rise takes us to ~0.45, apex hangs around 0.45-0.55, fall takes us to 1
+    const riseT = 0.45
+    const fallT = 0.55
 
     // Generate trajectory points
     for (let i = 0; i <= flightFrames; i++) {
       const frameIndex = impactFrame + i
       if (frameIndex >= totalFrames) break
 
-      // Map frame time to curve position
-      // Rise phase: frames 0 to riseFrames map to curve t = 0 to apexT
-      // Fall phase: frames riseFrames to total map to curve t = apexT to 1
+      // Map frame time to curve position with three phases
       let t: number
       if (i <= riseFrames) {
-        // Rising - speed already affects riseFrames count
-        t = (i / riseFrames) * apexT
+        // Rising phase - ball speed affects this
+        const riseProgress = i / riseFrames
+        t = riseProgress * riseT
+      } else if (i <= riseFrames + apexFrames) {
+        // Apex phase - hangtime keeps ball near top
+        const apexProgress = (i - riseFrames) / Math.max(1, apexFrames)
+        t = riseT + apexProgress * (fallT - riseT)
       } else {
-        // Falling - constant gravity timing
-        const fallProgress = (i - riseFrames) / fallFrames
-        t = apexT + fallProgress * (1 - apexT)
+        // Fall phase - gravity only
+        const fallProgress = (i - riseFrames - apexFrames) / fallFrames
+        t = fallT + fallProgress * (1 - fallT)
       }
       t = Math.min(1, Math.max(0, t))
 
@@ -120,7 +131,7 @@ export function ManualTracerCreator({
 
       // Y: Quadratic parabola through start, apex, end
       const dy = endY - startY
-      const A = (-rise - dy * apexT) / (apexT * (apexT - 1))
+      const A = (-rise - dy * riseT) / (riseT * (riseT - 1))
       const B = dy - A
       const C = startY
       let y = A * t * t + B * t + C
@@ -467,6 +478,17 @@ export function ManualTracerCreator({
                 className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
               />
               <span className="text-white/70 tabular-nums w-8 text-right">{params.ballSpeed.toFixed(1)}x</span>
+
+              <span className="text-white/50 font-medium">Hang</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={params.hangtime * 100}
+                onChange={(e) => setParams(p => ({ ...p, hangtime: Number(e.target.value) / 100 }))}
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
+              />
+              <span className="text-white/70 tabular-nums w-8 text-right">{Math.round(params.hangtime * 100)}%</span>
             </div>
 
             {/* Color picker - compact */}

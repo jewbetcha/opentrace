@@ -11,7 +11,8 @@ interface ControlPoint {
 interface TracerParams {
   peakHeight: number
   curve: number
-  ballSpeed: number  // 0.5 to 2.0 multiplier
+  ballSpeed: number  // affects rise phase only
+  hangtime: number   // 0-1, affects how long ball stays at apex
 }
 
 const TRACER_COLORS = [
@@ -68,7 +69,8 @@ export function TraceEditor({
     return {
       peakHeight: 0.3,
       curve: 0,
-      ballSpeed: initialBallSpeed
+      ballSpeed: initialBallSpeed,
+      hangtime: 0.3  // Default moderate hangtime
     }
   })
 
@@ -107,13 +109,13 @@ export function TraceEditor({
       }
     }
 
-    // Control point on way up (between start and peak)
-    const upIdx = Math.floor(peakIdx * 0.5)
-    const upPoint = points[upIdx] || points[Math.floor(points.length * 0.25)]
+    // Place control points at ~30% and ~70% of trajectory for tighter curve control
+    // These sit closer to the actual trajectory path
+    const upIdx = Math.floor(peakIdx * 0.6)  // 60% of way to peak
+    const upPoint = points[upIdx] || points[Math.floor(points.length * 0.3)]
 
-    // Control point on way down (between peak and end)
-    const downIdx = peakIdx + Math.floor((points.length - 1 - peakIdx) * 0.5)
-    const downPoint = points[downIdx] || points[Math.floor(points.length * 0.75)]
+    const downIdx = peakIdx + Math.floor((points.length - 1 - peakIdx) * 0.4)  // 40% into descent
+    const downPoint = points[downIdx] || points[Math.floor(points.length * 0.7)]
 
     setControlPoints([
       { id: 'controlUp', x: upPoint.x, y: upPoint.y, label: 'Rise' },
@@ -123,7 +125,7 @@ export function TraceEditor({
   }, [points])
 
   // Regenerate trajectory from control points using cubic Bezier for shape, physics for timing
-  const regenerateFromControlPoints = useCallback((controls: ControlPoint[], ballSpeed: number) => {
+  const regenerateFromControlPoints = useCallback((controls: ControlPoint[], ballSpeed: number, hangtime: number) => {
     if (controls.length < 3) return
 
     const controlUp = controls.find(c => c.id === 'controlUp')!
@@ -136,40 +138,48 @@ export function TraceEditor({
     const fall = Math.max(10, endPoint.y - apexY)
 
     // PHYSICS-BASED FRAME CALCULATION
-    // Ball speed affects RISE phase (faster ball = fewer frames to apex)
+    // Ball speed affects RISE phase only (faster ball = fewer frames to apex)
+    // Hangtime affects how long ball stays near apex
     // Fall is purely gravity (constant, determined by fall height)
-    const BASE_RISE_FRAMES = 60
-    const GRAVITY_SCALE = 15  // Reduced so fall doesn't dominate
+    const BASE_RISE_FRAMES = 45
+    const HANGTIME_FRAMES = 40  // Max frames at apex
+    const GRAVITY_SCALE = 12
 
-    // Speed affects rise, fall is constant gravity
+    // Speed affects rise only
     const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(rise / 100)))
+    // Hangtime adds frames at the apex
+    const apexFrames = Math.round(hangtime * HANGTIME_FRAMES)
+    // Fall is constant gravity
     const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
 
-    const totalFlightFrames = riseFrames + fallFrames
+    const totalFlightFrames = riseFrames + apexFrames + fallFrames
     const maxFrames = totalFrames - impactFrame - 1
     const flightFrames = Math.min(totalFlightFrames, maxFrames)
 
     const newPoints: TrackPoint[] = []
 
-    // Total frames for the animation
-    const totalAnimFrames = riseFrames + fallFrames
-    const apexT = riseFrames / totalAnimFrames  // When apex occurs (0-1)
+    // Curve timing: rise takes us to ~0.45, apex hangs around 0.45-0.55, fall takes us to 1
+    const riseT = 0.45  // Where on the bezier curve the apex is
+    const fallT = 0.55
 
     for (let i = 0; i <= flightFrames; i++) {
       const frameIndex = impactFrame + i
       if (frameIndex >= totalFrames) break
 
-      // Map frame time to curve position
-      // Rise phase: frames 0 to riseFrames map to curve t = 0 to apexT
-      // Fall phase: frames riseFrames to total map to curve t = apexT to 1
+      // Map frame time to curve position with three phases
       let curveT: number
       if (i <= riseFrames) {
-        // Rising - speed already affects riseFrames count
-        curveT = (i / riseFrames) * apexT
+        // Rising phase - ball speed affects this
+        const riseProgress = i / riseFrames
+        curveT = riseProgress * riseT
+      } else if (i <= riseFrames + apexFrames) {
+        // Apex phase - hangtime keeps ball near top
+        const apexProgress = (i - riseFrames) / Math.max(1, apexFrames)
+        curveT = riseT + apexProgress * (fallT - riseT)
       } else {
-        // Falling - constant gravity timing
-        const fallProgress = (i - riseFrames) / fallFrames
-        curveT = apexT + fallProgress * (1 - apexT)
+        // Fall phase - gravity only
+        const fallProgress = (i - riseFrames - apexFrames) / fallFrames
+        curveT = fallT + fallProgress * (1 - fallT)
       }
       curveT = Math.min(1, Math.max(0, curveT))
 
@@ -239,10 +249,10 @@ export function TraceEditor({
         }
       })
     }
-    // For ballSpeed, just regenerate with same control points (physics recalculates frames)
+    // For ballSpeed and hangtime, just regenerate with same control points (physics recalculates frames)
 
     setControlPoints(newControls)
-    regenerateFromControlPoints(newControls, newParams.ballSpeed)
+    regenerateFromControlPoints(newControls, newParams.ballSpeed, newParams.hangtime)
   }, [params, controlPoints, videoWidth, videoHeight, regenerateFromControlPoints])
 
   const HIT_RADIUS = 40
@@ -313,10 +323,10 @@ export function TraceEditor({
       const updated = prev.map(cp =>
         cp.id === selectedControl ? { ...cp, x: clampedX, y: clampedY } : cp
       )
-      regenerateFromControlPoints(updated, params.ballSpeed)
+      regenerateFromControlPoints(updated, params.ballSpeed, params.hangtime)
       return updated
     })
-  }, [isDragging, selectedControl, toVideoCoords, videoWidth, videoHeight, params.ballSpeed, regenerateFromControlPoints])
+  }, [isDragging, selectedControl, toVideoCoords, videoWidth, videoHeight, params.ballSpeed, params.hangtime, regenerateFromControlPoints])
 
   const handleEnd = useCallback(() => {
     setIsDragging(false)
@@ -517,6 +527,17 @@ export function TraceEditor({
                 className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-[#FFD700]"
               />
               <span className="text-white/70 tabular-nums w-8 text-right">{params.ballSpeed.toFixed(1)}x</span>
+
+              <span className="text-white/50 font-medium">Hang</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={params.hangtime * 100}
+                onChange={(e) => handleParamChange('hangtime', Number(e.target.value) / 100)}
+                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-[#FFD700]"
+              />
+              <span className="text-white/70 tabular-nums w-8 text-right">{Math.round(params.hangtime * 100)}%</span>
             </div>
 
             {/* Color picker - compact horizontal row */}
