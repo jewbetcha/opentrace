@@ -11,14 +11,14 @@ app = modal.App("opentrace-render")
 image = (
     modal.Image.debian_slim()
     .apt_install("ffmpeg")
-    .pip_install("Pillow", "fastapi", "aggdraw")
+    .pip_install("Pillow", "fastapi")
 )
 
 
 @app.function(
     image=image,
     timeout=900,  # 15 minute timeout for longer videos
-    memory=32768,  # 32GB RAM - maximum for standard instances
+    memory=32768,  # 32GB RAM
     cpu=8,  # More CPU cores for faster processing
 )
 @modal.fastapi_endpoint(method="POST")
@@ -26,28 +26,20 @@ def render_video(data: dict):
     """
     Render a video with tracer overlay.
 
-    Expects JSON body with:
-    - video_base64: base64 encoded video file
-    - points: array of {frameIndex, x, y} tracer points
-    - fps: output framerate
-    - source_fps: original video framerate (for frame index scaling)
-    - width: video width
-    - height: video height
-    - duration: video duration in seconds
-    - style: {startColor, endColor, lineWidth, glowIntensity}
+    OPTIMIZED VERSION: Pipes frames directly to FFmpeg to avoid disk I/O.
     """
     import base64
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw
     import io
     import time
 
     total_start = time.time()
-    print(f"[RENDER] Starting render job")
+    print(f"[RENDER] Starting render job (optimized pipeline)")
 
     video_base64 = data["video_base64"]
     points = data["points"]
     output_fps = data.get("fps", 60)
-    source_fps = data.get("source_fps", 30)  # FPS the frameIndex values are based on
+    source_fps = data.get("source_fps", 30)
     width = data["width"]
     height = data["height"]
     duration = data["duration"]
@@ -62,8 +54,24 @@ def render_video(data: dict):
     print(f"[RENDER] Points: {len(points)} tracer points")
     print(f"[RENDER] Input size: {len(video_base64) / 1024 / 1024:.2f} MB (base64)")
 
-    # Calculate frame scaling factor
     fps_scale = output_fps / source_fps
+    total_frames = int(duration * output_fps)
+    line_width = style.get("lineWidth", 4)
+    glow_intensity = style.get("glowIntensity", 10)
+
+    # Adaptive supersampling
+    total_pixels = width * height
+    is_high_res = total_pixels >= 1920 * 1080
+    is_4k = total_pixels >= 3840 * 2160
+
+    if is_4k or total_frames > 600:
+        scale = 1
+    elif is_high_res or total_frames > 300:
+        scale = 2
+    else:
+        scale = 2
+
+    print(f"[RENDER] Resolution: {width}x{height}, scale={scale}x, total_frames={total_frames}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write input video
@@ -72,40 +80,59 @@ def render_video(data: dict):
         video_bytes = base64.b64decode(video_base64)
         with open(input_path, "wb") as f:
             f.write(video_bytes)
-        print(f"[RENDER] Decoded and wrote input video: {len(video_bytes) / 1024 / 1024:.2f} MB in {time.time() - step_start:.2f}s")
+        print(f"[RENDER] Input video ready: {len(video_bytes) / 1024 / 1024:.2f} MB in {time.time() - step_start:.2f}s")
 
-        # Generate tracer overlay frames as transparent PNGs
-        overlay_dir = os.path.join(tmpdir, "overlays")
-        os.makedirs(overlay_dir)
+        output_path = os.path.join(tmpdir, "output.mp4")
 
-        total_frames = int(duration * output_fps)
-        line_width = style.get("lineWidth", 4)
-        glow_intensity = style.get("glowIntensity", 10)
+        # Start FFmpeg process with pipe input for overlay frames
+        # This avoids writing thousands of PNG files to disk
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            # Input 1: Original video
+            "-i", input_path,
+            # Input 2: Raw RGBA frames piped from stdin
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "-s", f"{width}x{height}",
+            "-r", str(output_fps),
+            "-i", "pipe:0",
+            # Filter: overlay with alpha blending
+            "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[out]",
+            "-map", "[out]",
+            "-map", "0:a:0?",
+            # Output encoding - optimized for speed
+            "-c:v", "libx264",
+            "-preset", "ultrafast",  # Fastest encoding
+            "-crf", "20",  # Slightly lower quality for speed (was 18)
+            "-tune", "fastdecode",  # Optimize for fast playback
+            "-c:a", "aac",
+            "-b:a", "128k",  # Lower audio bitrate
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-threads", "0",  # Use all CPU cores
+            "-r", str(output_fps),
+            output_path
+        ]
 
-        # Adaptive supersampling - consider BOTH resolution and duration
-        # High-res videos (1080p+) don't need as much supersampling
-        total_pixels = width * height
-        is_high_res = total_pixels >= 1920 * 1080  # >= 1080p (includes portrait 1080x1920)
-        is_4k = total_pixels >= 3840 * 2160
+        print(f"[RENDER] Starting FFmpeg pipeline...")
+        ffmpeg_start = time.time()
 
-        if is_4k or total_frames > 600:
-            scale = 1  # No supersampling for 4K
-        elif is_high_res or total_frames > 300:
-            scale = 2  # 2x for 1080p
-        else:
-            scale = 2  # 2x max - 3x is too slow with glow effects
+        proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
 
-        # Find first and last frame with tracer for optimization
-        first_tracer_frame = min(p["frameIndex"] for p in points) if points else 0
-        last_tracer_frame = max(p["frameIndex"] for p in points) if points else total_frames
-        first_output_frame = int(first_tracer_frame * fps_scale)
-
-        print(f"[RENDER] Resolution: {width}x{height} ({total_pixels/1e6:.1f}MP), high_res={is_high_res}, is_4k={is_4k}")
-        print(f"[RENDER] Tracer spans frames {first_tracer_frame}-{last_tracer_frame} (source), starting output at frame {first_output_frame}")
-        print(f"[RENDER] Generating {total_frames} overlay frames at {scale}x supersampling")
+        # Generate and pipe frames directly to FFmpeg
         frame_gen_start = time.time()
         last_progress_log = 0
         frames_with_content = 0
+
+        # Pre-create empty frame bytes for reuse
+        empty_frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        empty_frame_bytes = empty_frame.tobytes()
 
         for frame_idx in range(total_frames):
             # Log progress every 10%
@@ -114,34 +141,31 @@ def render_video(data: dict):
                 elapsed = time.time() - frame_gen_start
                 fps_rate = frame_idx / elapsed if elapsed > 0 else 0
                 remaining = (total_frames - frame_idx) / fps_rate if fps_rate > 0 else 0
-                print(f"[RENDER] Frame generation: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} frames/sec, ~{remaining:.1f}s remaining")
+                print(f"[RENDER] Progress: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} fps, ~{remaining:.1f}s remaining")
                 last_progress_log = progress_pct
 
-            # Scale frame index back to source fps for comparison
             source_frame_idx = frame_idx / fps_scale
-
-            # Get visible points up to this frame (using scaled frame index)
             visible_points = [p for p in points if p["frameIndex"] <= source_frame_idx]
 
-            # For frames before tracer or with < 2 points, create empty overlay quickly
+            # For frames without tracer, send pre-computed empty frame
             if len(visible_points) < 2:
-                img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-                frame_path = os.path.join(overlay_dir, f"overlay{frame_idx:06d}.png")
-                img.save(frame_path, "PNG")
+                proc.stdin.write(empty_frame_bytes)
                 continue
 
             frames_with_content += 1
 
-            # Create transparent image (higher res for anti-aliasing)
-            img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+            # Create frame with tracer
+            if scale > 1:
+                img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+            else:
+                img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Draw tracer - optimized version without expensive blur
-            # Draw glow as multiple semi-transparent thick lines (much faster than blur)
+            # Draw glow - reduced to 2 layers for speed
             if glow_intensity > 0:
-                for layer in range(3, 0, -1):  # 3 glow layers, outer to inner
-                    alpha = int(40 / layer)  # Decreasing opacity
-                    glow_width = line_width + glow_intensity * layer * 0.5
+                for layer in range(2, 0, -1):  # 2 glow layers instead of 3
+                    alpha = int(50 / layer)
+                    glow_width = line_width + glow_intensity * layer * 0.6
 
                     for i in range(1, len(visible_points)):
                         p1 = visible_points[i - 1]
@@ -156,7 +180,7 @@ def render_video(data: dict):
                             width=int(glow_width * scale)
                         )
 
-            # Draw main tracer line with simple soft edge (2 passes instead of 3)
+            # Draw main tracer line
             for i in range(1, len(visible_points)):
                 p1 = visible_points[i - 1]
                 p2 = visible_points[i]
@@ -164,87 +188,59 @@ def render_video(data: dict):
                 color = interpolate_color(style["startColor"], style["endColor"], t)
                 base_width = line_width * (1 - t * 0.3) * scale
 
-                # Soft outer edge
-                outer_color = color[:3] + (120,)
+                # Core line with slight outer glow
+                outer_color = color[:3] + (150,)
                 draw.line(
                     [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
                     fill=outer_color,
-                    width=int(base_width * 1.3)
+                    width=int(base_width * 1.2)
                 )
-
-                # Core line
                 draw.line(
                     [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
                     fill=color,
                     width=int(base_width)
                 )
 
-                # Joint circle for smooth connections
-                radius = int(base_width * 0.5)
+                # Joint circle
+                radius = int(base_width * 0.4)
                 draw.ellipse(
                     [p2["x"] * scale - radius, p2["y"] * scale - radius,
                      p2["x"] * scale + radius, p2["y"] * scale + radius],
                     fill=color
                 )
 
-            # Downscale for anti-aliasing effect
-            img = img.resize((width, height), Image.LANCZOS)
+            # Downscale if supersampled
+            if scale > 1:
+                img = img.resize((width, height), Image.LANCZOS)
 
-            # Save frame
-            frame_path = os.path.join(overlay_dir, f"overlay{frame_idx:06d}.png")
-            img.save(frame_path, "PNG")
+            # Write raw RGBA bytes directly to FFmpeg pipe
+            proc.stdin.write(img.tobytes())
+
+        # Close stdin and wait for FFmpeg to finish
+        proc.stdin.close()
+        stdout, stderr = proc.communicate()
 
         frame_gen_elapsed = time.time() - frame_gen_start
-        print(f"[RENDER] Frame generation complete: {total_frames} frames in {frame_gen_elapsed:.2f}s ({total_frames/frame_gen_elapsed:.1f} fps)")
-        print(f"[RENDER] Frames with tracer content: {frames_with_content}/{total_frames} ({100*frames_with_content/total_frames:.1f}%)")
-
-        # Use FFmpeg to composite overlay onto original video
-        output_path = os.path.join(tmpdir, "output.mp4")
-        print(f"[RENDER] Starting FFmpeg compositing...")
-
-        cmd = [
-            "ffmpeg",
-            "-i", input_path,
-            "-framerate", str(output_fps),
-            "-i", os.path.join(overlay_dir, "overlay%06d.png"),
-            "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[out]",
-            "-map", "[out]",
-            "-map", "0:a:0?",  # Only first audio stream, if present
-            "-c:v", "libx264",
-            "-c:a", "aac",  # Re-encode audio to avoid codec issues
-            "-b:a", "192k",
-            "-preset", "fast",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            "-r", str(output_fps),
-            "-y",
-            output_path
-        ]
-
-        ffmpeg_start = time.time()
-        result = subprocess.run(cmd, capture_output=True, text=True)
         ffmpeg_elapsed = time.time() - ffmpeg_start
 
-        if result.returncode != 0:
-            print(f"[RENDER] FFmpeg FAILED after {ffmpeg_elapsed:.2f}s")
-            print(f"[RENDER] FFmpeg stderr: {result.stderr}")
-            return {"error": result.stderr}
+        if proc.returncode != 0:
+            print(f"[RENDER] FFmpeg FAILED")
+            print(f"[RENDER] FFmpeg stderr: {stderr.decode()}")
+            return {"error": stderr.decode()}
 
-        print(f"[RENDER] FFmpeg complete in {ffmpeg_elapsed:.2f}s")
+        print(f"[RENDER] Frame generation: {total_frames} frames in {frame_gen_elapsed:.2f}s ({total_frames/frame_gen_elapsed:.1f} fps)")
+        print(f"[RENDER] Frames with tracer: {frames_with_content}/{total_frames}")
+        print(f"[RENDER] FFmpeg total time: {ffmpeg_elapsed:.2f}s")
 
         # Read output and return as base64
         encode_start = time.time()
         with open(output_path, "rb") as f:
             output_bytes = f.read()
         output_base64 = base64.b64encode(output_bytes).decode("utf-8")
-        encode_elapsed = time.time() - encode_start
 
         output_size_mb = len(output_bytes) / 1024 / 1024
-        print(f"[RENDER] Output video: {output_size_mb:.2f} MB, encoded to base64 in {encode_elapsed:.2f}s")
-
         total_elapsed = time.time() - total_start
-        print(f"[RENDER] COMPLETE - Total time: {total_elapsed:.2f}s")
+        print(f"[RENDER] Output: {output_size_mb:.2f} MB, total time: {total_elapsed:.2f}s")
 
         return {
             "success": True,
