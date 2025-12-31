@@ -7,6 +7,14 @@ import {
   calculateBezierT,
   calculateFlightFrames
 } from '../lib/trajectory'
+import {
+  TracerSliderGrid,
+  ColorPicker,
+  ActionButtons,
+  ControlPanel,
+  SliderStyles,
+  type TracerParams as BaseTracerParams
+} from './TracerControls'
 
 interface ManualTracerCreatorProps {
   videoWidth: number
@@ -20,28 +28,14 @@ interface ManualTracerCreatorProps {
   onComplete: (points: TrackPoint[], color: string, ballSpeed: number) => void
 }
 
-interface TracerParams {
+interface TracerParams extends BaseTracerParams {
   startX: number
   startY: number
   endX: number
   endY: number
-  peakHeight: number
-  curve: number
-  ballSpeed: number  // affects rise phase only
-  hangtime: number   // 0-1, affects how long ball stays at apex
   impactFrame: number
   color: string
 }
-
-const TRACER_COLORS = [
-  { name: 'Blue', value: '#3B82F6' },
-  { name: 'Red', value: '#EF4444' },
-  { name: 'Green', value: '#22C55E' },
-  { name: 'Yellow', value: '#EAB308' },
-  { name: 'Purple', value: '#A855F7' },
-  { name: 'Orange', value: '#F97316' },
-  { name: 'White', value: '#FFFFFF' },
-]
 
 type Mode = 'impact' | 'start' | 'end' | 'adjust'
 
@@ -378,139 +372,30 @@ export function ManualTracerCreator({
         </div>
       )}
 
-      {/* Adjustment controls - ultra compact */}
+      {/* Adjustment controls - using shared components */}
       {mode === 'adjust' && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm py-3 px-3 border-t border-white/5">
-          <div className="max-w-sm mx-auto space-y-2">
-            {/* Sliders in a tight grid */}
-            <div className="grid grid-cols-[auto_1fr_auto] gap-x-2 gap-y-1.5 items-center text-[11px]">
-              <span className="text-white/50 font-medium">Height</span>
-              <input
-                type="range"
-                min="0"
-                max="80"
-                value={params.peakHeight * 100}
-                onChange={(e) => setParams(p => ({ ...p, peakHeight: Number(e.target.value) / 100 }))}
-                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
-              />
-              <span className="text-white/70 tabular-nums w-8 text-right">{Math.round(params.peakHeight * 100)}%</span>
-
-              <span className="text-white/50 font-medium">Curve</span>
-              <input
-                type="range"
-                min="-100"
-                max="100"
-                value={params.curve * 100}
-                onChange={(e) => setParams(p => ({ ...p, curve: Number(e.target.value) / 100 }))}
-                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
-              />
-              <span className="text-white/70 tabular-nums w-8 text-right">
-                {params.curve > 0 ? `+${Math.round(params.curve * 100)}` :
-                 params.curve < 0 ? `${Math.round(params.curve * 100)}` : '0'}
-              </span>
-
-              <span className="text-white/50 font-medium">Speed</span>
-              <input
-                type="range"
-                min="0.5"
-                max="10"
-                step="0.5"
-                value={params.ballSpeed}
-                onChange={(e) => setParams(p => ({ ...p, ballSpeed: Number(e.target.value) }))}
-                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
-              />
-              <span className="text-white/70 tabular-nums w-8 text-right">{params.ballSpeed.toFixed(1)}x</span>
-
-              <span className="text-white/50 font-medium">Hang</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={params.hangtime * 100}
-                onChange={(e) => setParams(p => ({ ...p, hangtime: Number(e.target.value) / 100 }))}
-                className="w-full h-1 bg-neutral-800 rounded-full appearance-none cursor-pointer"
-              />
-              <span className="text-white/70 tabular-nums w-8 text-right">{Math.round(params.hangtime * 100)}%</span>
-            </div>
-
-            {/* Color picker - compact */}
-            <div className="flex items-center gap-2 pt-0.5">
-              <span className="text-[11px] text-white/50 font-medium">Color</span>
-              <div className="flex gap-1.5 flex-1">
-                {TRACER_COLORS.map((c) => (
-                  <button
-                    key={c.value}
-                    onClick={() => setParams(p => ({ ...p, color: c.value }))}
-                    className={`w-5 h-5 rounded-full transition-transform ${
-                      params.color === c.value
-                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black scale-110'
-                        : 'opacity-50 hover:opacity-80'
-                    }`}
-                    style={{ backgroundColor: c.value }}
-                    title={c.name}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Action buttons - slim */}
-            <div className="flex gap-2 pt-1">
-              <button
-                onClick={() => {
-                  setMode('impact')
-                  setParams(p => ({ ...p, startX: 0, startY: 0, endX: 0, endY: 0 }))
-                  setPointsSet({ start: false, end: false })
-                }}
-                className="flex-1 py-1.5 rounded-lg bg-white/5 text-white/70 text-[11px] font-medium hover:bg-white/10 transition-colors"
-                style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
-              >
-                Reset
-              </button>
-              <button
-                onClick={handleComplete}
-                className="flex-1 py-1.5 rounded-lg bg-[#FFD700] text-black text-[11px] font-semibold hover:bg-[#FFD700]/90 transition-colors"
-                style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
-              >
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
+        <ControlPanel>
+          <TracerSliderGrid
+            params={params}
+            onParamChange={(key, value) => setParams(p => ({ ...p, [key]: value }))}
+          />
+          <ColorPicker
+            selectedColor={params.color}
+            onColorChange={(color) => setParams(p => ({ ...p, color }))}
+          />
+          <ActionButtons
+            onReset={() => {
+              setMode('impact')
+              setParams(p => ({ ...p, startX: 0, startY: 0, endX: 0, endY: 0 }))
+              setPointsSet({ start: false, end: false })
+            }}
+            onConfirm={handleComplete}
+            confirmLabel="Continue"
+          />
+        </ControlPanel>
       )}
 
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
-
-        input[type="range"] {
-          -webkit-appearance: none;
-          appearance: none;
-          background: #1a1a1a;
-          border-radius: 9999px;
-          height: 4px;
-        }
-
-        input[type="range"]::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 14px;
-          height: 14px;
-          border-radius: 50%;
-          background: #FFD700;
-          cursor: pointer;
-          border: none;
-          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
-        }
-
-        input[type="range"]::-moz-range-thumb {
-          width: 14px;
-          height: 14px;
-          border-radius: 50%;
-          background: #FFD700;
-          cursor: pointer;
-          border: none;
-          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
-        }
-      `}</style>
+      <SliderStyles />
     </>
   )
 }
