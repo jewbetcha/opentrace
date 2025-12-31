@@ -172,12 +172,24 @@ export interface BezierControlPoints {
 // === TRACKMAN CONSTANTS ===
 // Centralized so all components use the same values
 export const TRACKMAN = {
-  APEX_X_RATIO: 0.80,           // Apex at 80% of horizontal distance
-  LAUNCH_FACTOR_BASE: 0.55,     // Base launch factor
-  LAUNCH_FACTOR_HANGTIME: 0.35, // Hangtime contribution (bumped up for more effect)
-  DESCENT_X_RATIO: 0.95,        // P2 at 95% horizontal (very close to end)
+  // Control point positioning
+  APEX_X_RATIO: 0.82,           // Apex at 82% of horizontal distance (long rise)
+  LAUNCH_FACTOR_BASE: 0.45,     // Base launch factor (lowered for more hangtime range)
+  LAUNCH_FACTOR_HANGTIME: 0.50, // Hangtime contribution (0.45 to 0.95 range)
+  DESCENT_X_RATIO: 0.96,        // P2 at 96% horizontal (very close to end = steep drop)
   CURVE_FACTOR_P1: 0.03,        // Curve effect on launch control
   CURVE_FACTOR_P2: 0.05,        // Curve effect on descent control
+
+  // Bezier t-mapping for "long rise, quick fall" effect
+  // These control how the ball moves along the curve over time
+  T_RISE_END: 0.50,             // Rise phase uses 0 to 0.50 of curve (50%)
+  T_APEX_END: 0.85,             // Apex phase uses 0.50 to 0.85 of curve (35% hang time!)
+  // Fall phase uses 0.85 to 1.0 (only 15% of curve = very steep fast drop)
+
+  // Frame timing constants
+  BASE_RISE_FRAMES: 50,         // Frames for rise
+  HANGTIME_FRAMES: 70,          // Much more frames at apex (was 40)
+  GRAVITY_SCALE: 8,             // Even faster fall (lower = fewer frames)
 }
 
 export interface TrackmanParams {
@@ -264,6 +276,7 @@ export function generateBezierPoints(cp: BezierControlPoints, numPoints: number 
 /**
  * Calculate physics-based frame timing for animation
  * Returns the t parameter for the Bezier curve based on frame index
+ * Uses TRACKMAN constants for "long rise, quick fall" effect
  */
 export function calculateBezierT(
   frameIndex: number,
@@ -271,23 +284,28 @@ export function calculateBezierT(
   apexFrames: number,
   fallFrames: number
 ): number {
+  const { T_RISE_END, T_APEX_END } = TRACKMAN
+  const T_APEX_DURATION = T_APEX_END - T_RISE_END  // ~0.23
+  const T_FALL_DURATION = 1.0 - T_APEX_END         // ~0.22
+
   if (frameIndex <= riseFrames) {
-    // Rise phase: t = 0 to 0.45
+    // Rise phase: long straight trajectory up
     const riseProgress = frameIndex / riseFrames
-    return riseProgress * 0.45
+    return riseProgress * T_RISE_END
   } else if (frameIndex <= riseFrames + apexFrames) {
-    // Apex phase: t = 0.45 to 0.60
+    // Apex phase: ball hangs at the top
     const apexProgress = (frameIndex - riseFrames) / Math.max(1, apexFrames)
-    return 0.45 + apexProgress * 0.15
+    return T_RISE_END + apexProgress * T_APEX_DURATION
   } else {
-    // Fall phase: t = 0.60 to 1.0
+    // Fall phase: steep fast drop (compressed into small portion of curve)
     const fallProgress = (frameIndex - riseFrames - apexFrames) / fallFrames
-    return 0.60 + fallProgress * 0.40
+    return T_APEX_END + fallProgress * T_FALL_DURATION
   }
 }
 
 /**
  * Calculate frame counts based on physics
+ * Uses TRACKMAN constants for timing
  */
 export function calculateFlightFrames(
   startY: number,
@@ -296,16 +314,22 @@ export function calculateFlightFrames(
   ballSpeed: number,
   hangtime: number
 ): { riseFrames: number; apexFrames: number; fallFrames: number; totalFrames: number } {
-  const BASE_RISE_FRAMES = 45
-  const HANGTIME_FRAMES = 30
-  const GRAVITY_SCALE = 12
+  const { BASE_RISE_FRAMES, HANGTIME_FRAMES, GRAVITY_SCALE } = TRACKMAN
 
   const rise = Math.max(10, startY - apexY)
   const fall = Math.max(10, endY - apexY)
 
+  // Rise: more frames for longer upward trajectory
   const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(rise / 100)))
-  const apexFrames = Math.round(hangtime * HANGTIME_FRAMES)
-  const fallFrames = Math.max(5, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
+
+  // Apex: hangtime scales with BOTH slider AND apex height
+  // Higher shots naturally have more hang time (ball moving slower at apex)
+  const heightFactor = Math.sqrt(rise / 100)  // Higher apex = more hang
+  const apexFrames = Math.round(hangtime * HANGTIME_FRAMES * (0.5 + heightFactor * 0.5))
+
+  // Fall: gravity accelerates - fewer frames for quick drop
+  const fallFrames = Math.max(3, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
+
   const totalFrames = riseFrames + apexFrames + fallFrames
 
   return { riseFrames, apexFrames, fallFrames, totalFrames }
