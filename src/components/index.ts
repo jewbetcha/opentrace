@@ -1,5 +1,4 @@
 export { VideoUploader } from './VideoUploader'
-export { ProcessingView } from './ProcessingView'
 export { VideoPlayer } from './VideoPlayer'
 export { TraceEditor } from './TraceEditor'
 export { ExportButton } from './ExportButton'

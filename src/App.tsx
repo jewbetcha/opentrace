@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { VideoUploader } from './components/VideoUploader'
-import { VideoPlayer, VideoPlayerHandle } from './components/VideoPlayer'
+import { VideoPlayer } from './components/VideoPlayer'
 import { TraceEditor } from './components/TraceEditor'
 import { ExportButton } from './components/ExportButton'
 import { ManualTracerCreator } from './components/ManualTracerCreator'
@@ -44,7 +44,6 @@ export default function App() {
   }, [])
 
   const containerRef = useRef<HTMLDivElement>(null)
-  const videoPlayerRef = useRef<VideoPlayerHandle>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
 
   const { video, metadata: videoMeta, loadVideoFile } = useVideoFrames()
@@ -89,10 +88,6 @@ export default function App() {
 
   const handleFrameChange = useCallback((frame: number) => {
     setCurrentFrame(frame)
-  }, [])
-
-  const handleSeekToFrame = useCallback((frame: number) => {
-    videoPlayerRef.current?.seekToFrame(frame)
   }, [])
 
   const handleTracerComplete = useCallback((newPoints: TrackPoint[], color: string, ballSpeed: number) => {
@@ -200,7 +195,6 @@ export default function App() {
         {/* Video with manual tracer overlay */}
         <div ref={containerRef} className="flex-1 relative overflow-hidden">
           <VideoPlayer
-            ref={videoPlayerRef}
             videoUrl={videoUrl}
             points={[]}
             fps={metadata.fps}
@@ -215,7 +209,6 @@ export default function App() {
               fps={metadata.fps}
               totalFrames={metadata.frameCount}
               currentFrame={currentFrame}
-              onSeekToFrame={handleSeekToFrame}
               onComplete={handleTracerComplete}
             />
           </VideoPlayer>

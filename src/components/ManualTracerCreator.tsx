@@ -24,7 +24,6 @@ interface ManualTracerCreatorProps {
   fps: number
   totalFrames: number
   currentFrame: number
-  onSeekToFrame?: (frame: number) => void
   onComplete: (points: TrackPoint[], color: string, ballSpeed: number) => void
 }
 

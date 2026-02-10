@@ -36,52 +36,11 @@ export function drawTracer(
     ctx.strokeStyle = color
     ctx.lineWidth = width
 
-    if (p2.isEstimated && !p1.isEstimated) {
-      ctx.setLineDash([8, 4])
-    } else if (p2.isEstimated) {
-      ctx.setLineDash([8, 4])
-    } else {
-      ctx.setLineDash([])
-    }
+    ctx.setLineDash(p2.isEstimated ? [8, 4] : [])
 
     ctx.beginPath()
     ctx.moveTo(p1.x, p1.y)
     ctx.lineTo(p2.x, p2.y)
-    ctx.stroke()
-  }
-
-  ctx.restore()
-}
-
-export function drawControlPoints(
-  ctx: CanvasRenderingContext2D,
-  points: TrackPoint[],
-  selectedIndex: number | null,
-  scale: number = 1
-): void {
-  const radius = 12 / scale
-
-  ctx.save()
-
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i]
-    const isSelected = i === selectedIndex
-
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
-
-    if (p.isEstimated) {
-      ctx.fillStyle = isSelected ? 'rgba(255, 69, 0, 0.9)' : 'rgba(255, 69, 0, 0.6)'
-      ctx.strokeStyle = '#FFF'
-      ctx.setLineDash([3, 3])
-    } else {
-      ctx.fillStyle = isSelected ? 'rgba(255, 215, 0, 0.9)' : 'rgba(255, 215, 0, 0.6)'
-      ctx.strokeStyle = '#FFF'
-      ctx.setLineDash([])
-    }
-
-    ctx.fill()
-    ctx.lineWidth = 2 / scale
     ctx.stroke()
   }
 
@@ -111,20 +70,3 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
   }
 }
 
-export function createGradientLine(
-  ctx: CanvasRenderingContext2D,
-  points: TrackPoint[],
-  startColor: string,
-  endColor: string
-): CanvasGradient | null {
-  if (points.length < 2) return null
-
-  const first = points[0]
-  const last = points[points.length - 1]
-
-  const gradient = ctx.createLinearGradient(first.x, first.y, last.x, last.y)
-  gradient.addColorStop(0, startColor)
-  gradient.addColorStop(1, endColor)
-
-  return gradient
-}
