@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { VideoUploader } from './components/VideoUploader'
-import { VideoPlayer } from './components/VideoPlayer'
+import { VideoPlayer, type VideoPlayerHandle } from './components/VideoPlayer'
 import { TraceEditor } from './components/TraceEditor'
 import { ExportButton } from './components/ExportButton'
 import { ManualTracerCreator } from './components/ManualTracerCreator'
@@ -45,6 +45,7 @@ export default function App() {
   }, [])
 
   const containerRef = useRef<HTMLDivElement>(null)
+  const videoPlayerRef = useRef<VideoPlayerHandle>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
 
   const { video, metadata: videoMeta, loadVideoFile } = useVideoFrames()
@@ -147,6 +148,11 @@ export default function App() {
     }
   }, [video, videoFile, points, metadata, tracerColor, exportVideo, showToast])
 
+  const handlePreview = useCallback(() => {
+    if (!points.length) return
+    videoPlayerRef.current?.seekToFrame(points[0].frameIndex)
+  }, [points])
+
   const handleStartOver = useCallback(() => {
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl)
@@ -209,6 +215,7 @@ export default function App() {
         {/* Video with manual tracer overlay */}
         <div ref={containerRef} className="flex-1 relative overflow-hidden">
           <VideoPlayer
+            ref={videoPlayerRef}
             videoUrl={videoUrl}
             points={[]}
             fps={metadata.fps}
@@ -275,7 +282,7 @@ export default function App() {
             }}
             showStats={false}
             showFullTracer={true}
-            showPlaybackControls={false}
+            showPlaybackControls={true}
           >
             <TraceEditor
               points={points}
@@ -290,6 +297,7 @@ export default function App() {
               onPointsUpdate={handlePointsUpdate}
               onColorChange={handleColorChange}
               onReset={handleReset}
+              onPreview={handlePreview}
               enabled={appState.type === 'editing'}
             />
           </VideoPlayer>

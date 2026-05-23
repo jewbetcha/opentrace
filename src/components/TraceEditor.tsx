@@ -39,6 +39,7 @@ interface TraceEditorProps {
   onPointsUpdate: (points: TrackPoint[]) => void
   onColorChange: (color: string) => void
   onReset: () => void
+  onPreview?: () => void
   enabled?: boolean
 }
 
@@ -55,12 +56,15 @@ export function TraceEditor({
   onPointsUpdate,
   onColorChange,
   onReset,
+  onPreview,
   enabled = true
 }: TraceEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [selectedControl, setSelectedControl] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [isEditMode, setIsEditMode] = useState(true) // Start in edit mode
+  const [isPreviewMode, setIsPreviewMode] = useState(false)
+  const dragOffsetRef = useRef({ x: 0, y: 0 })
 
   // Control points for bezier curve
   const [controlPoints, setControlPoints] = useState<ControlPoint[]>([])
@@ -265,16 +269,35 @@ export function TraceEditor({
 
   const HIT_RADIUS = 40
 
+  const getHandleCanvasCoords = useCallback((cp: ControlPoint, radius: number = 16) => {
+    const raw = toCanvasCoords(cp.x, cp.y)
+    const minX = radius + 10
+    const maxX = containerWidth - radius - 10
+    const minY = radius + 10
+    const maxY = containerHeight - radius - 10
+
+    if (raw.y < minY) {
+      const sideX = raw.x < containerWidth / 2 ? minX : maxX
+      return { x: sideX, y: minY + 54, raw }
+    }
+
+    return {
+      x: Math.max(minX, Math.min(maxX, raw.x)),
+      y: Math.max(minY, Math.min(maxY, raw.y)),
+      raw
+    }
+  }, [toCanvasCoords, containerWidth, containerHeight])
+
   const findNearestControl = useCallback((canvasX: number, canvasY: number): string | null => {
     for (const cp of controlPoints) {
-      const { x, y } = toCanvasCoords(cp.x, cp.y)
+      const { x, y } = getHandleCanvasCoords(cp)
       const dist = Math.sqrt((canvasX - x) ** 2 + (canvasY - y) ** 2)
       if (dist < HIT_RADIUS) {
         return cp.id
       }
     }
     return null
-  }, [controlPoints, toCanvasCoords])
+  }, [controlPoints, getHandleCanvasCoords])
 
   const getEventCoords = (e: React.TouchEvent | React.MouseEvent | TouchEvent | MouseEvent): { x: number; y: number } | null => {
     const canvas = canvasRef.current
@@ -309,11 +332,20 @@ export function TraceEditor({
 
     const nearestId = findNearestControl(coords.x, coords.y)
     if (nearestId) {
+      const selectedPoint = controlPoints.find(cp => cp.id === nearestId)
+      const pointerVideoCoords = toVideoCoords(coords.x, coords.y)
+      dragOffsetRef.current = selectedPoint
+        ? {
+            x: selectedPoint.x - pointerVideoCoords.x,
+            y: selectedPoint.y - pointerVideoCoords.y
+          }
+        : { x: 0, y: 0 }
+
       e.preventDefault()
       setSelectedControl(nearestId)
       setIsDragging(true)
     }
-  }, [enabled, isEditMode, findNearestControl])
+  }, [enabled, isEditMode, findNearestControl, controlPoints, toVideoCoords])
 
   const handleMove = useCallback((e: TouchEvent | MouseEvent) => {
     if (!isDragging || !selectedControl) return
@@ -324,10 +356,11 @@ export function TraceEditor({
     if (!coords) return
 
     const videoCoords = toVideoCoords(coords.x, coords.y)
+    const dragOffset = dragOffsetRef.current
     const nextControlPoint = clampControlPoint({
       id: selectedControl as ControlPoint['id'],
-      x: videoCoords.x,
-      y: videoCoords.y,
+      x: videoCoords.x + dragOffset.x,
+      y: videoCoords.y + dragOffset.y,
       label: ''
     })
 
@@ -341,6 +374,7 @@ export function TraceEditor({
   }, [isDragging, selectedControl, toVideoCoords, params.ballSpeed, params.hangtime, regenerateFromControlPoints, clampControlPoint])
 
   const handleEnd = useCallback(() => {
+    dragOffsetRef.current = { x: 0, y: 0 }
     setIsDragging(false)
     setSelectedControl(null)
   }, [])
@@ -380,7 +414,7 @@ export function TraceEditor({
     canvas.height = containerHeight
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    if (!isEditMode || !enabled || controlPoints.length === 0) return
+    if (!isEditMode || isPreviewMode || !enabled || controlPoints.length === 0) return
 
     // Draw bezier curve guide lines
     if (points.length > 0 && controlPoints.length >= 3) {
@@ -407,9 +441,8 @@ export function TraceEditor({
       const raw = toCanvasCoords(cp.x, cp.y)
       const isSelected = cp.id === selectedControl
       const radius = isSelected ? 20 : 16
-      const x = raw.x
-      const y = Math.max(radius + 10, Math.min(containerHeight - radius - 10, raw.y))
-      const isOffscreen = raw.y !== y
+      const { x, y } = getHandleCanvasCoords(cp, radius)
+      const isOffscreen = raw.x !== x || raw.y !== y
 
       // Outer ring shadow
       ctx.beginPath()
@@ -472,13 +505,16 @@ export function TraceEditor({
     ctx.fillText('Start', start.x, start.y + 28)
     ctx.shadowBlur = 0
 
-  }, [controlPoints, containerWidth, containerHeight, toCanvasCoords, selectedControl, isEditMode, enabled, points, startPos])
+  }, [controlPoints, containerWidth, containerHeight, toCanvasCoords, selectedControl, isEditMode, isPreviewMode, enabled, points, startPos, getHandleCanvasCoords])
 
   return (
     <>
       {/* Edit mode toggle button - compact pill */}
       <button
-        onClick={() => setIsEditMode(!isEditMode)}
+        onClick={() => {
+          setIsEditMode(!isEditMode)
+          setIsPreviewMode(false)
+        }}
         className={`
           absolute top-3 right-3 z-20 px-3 py-1.5 rounded-full
           flex items-center gap-1.5
@@ -498,12 +534,29 @@ export function TraceEditor({
         </span>
       </button>
 
+      {isEditMode && (
+        <button
+          onClick={() => {
+            setIsPreviewMode(true)
+            setIsEditMode(false)
+            onPreview?.()
+          }}
+          className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-full bg-white/10 text-white/90 backdrop-blur-sm flex items-center gap-1.5 transition-colors hover:bg-white/15"
+          style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}
+        >
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <span className="text-xs font-semibold">Preview</span>
+        </button>
+      )}
+
       {/* Editor canvas overlay */}
       <canvas
         ref={canvasRef}
         className={`
           absolute inset-0 w-full h-full z-10
-          ${isEditMode ? 'touch-none' : 'pointer-events-none'}
+          ${isEditMode && !isPreviewMode ? 'touch-none' : 'pointer-events-none'}
           ${isDragging ? 'cursor-grabbing' : isEditMode ? 'cursor-grab' : ''}
         `}
         onTouchStart={handleStart}
@@ -511,7 +564,7 @@ export function TraceEditor({
       />
 
       {/* Edit mode controls panel - using shared components */}
-      {isEditMode && (
+      {isEditMode && !isPreviewMode && (
         <ControlPanel>
           <TracerSliderGrid
             params={params}

@@ -95,39 +95,31 @@ def render_video(data: dict):
         print(f"[RENDER] Input video ready: {len(video_bytes) / 1024 / 1024:.2f} MB in {time.time() - step_start:.2f}s")
 
         output_path = os.path.join(tmpdir, "output.mp4")
-        overlay_path = os.path.join(tmpdir, "overlay.png")
-        mask_path = os.path.join(tmpdir, "mask.mp4")
-        draw_overlay_image(
-            overlay_path,
-            sorted_points,
-            width,
-            height,
-            scale,
-            line_width,
-            glow_intensity,
-            start_color,
-            end_color
-        )
-        render_reveal_mask(
-            mask_path,
+        overlay_dir = os.path.join(tmpdir, "overlay")
+        os.makedirs(overlay_dir, exist_ok=True)
+        render_overlay_frames(
+            overlay_dir,
             sorted_points,
             width,
             height,
             duration,
             output_fps,
             source_fps,
+            scale,
             line_width,
-            glow_intensity
+            glow_intensity,
+            start_color,
+            end_color
         )
 
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
             "-i", input_path,
-            "-i", overlay_path,
-            "-i", mask_path,
+            "-framerate", str(output_fps),
+            "-i", os.path.join(overlay_dir, "overlay_%05d.png"),
             "-filter_complex",
-            "[1:v]format=rgba[ov];[2:v]format=gray[mask];[ov][mask]alphamerge[revealed];[0:v][revealed]overlay=0:0:format=auto:shortest=1[out]",
+            "[0:v][1:v]overlay=0:0:format=auto:shortest=1[out]",
             "-map", "[out]",
             "-map", "0:a:0?",
             "-c:v", "libx264",
@@ -217,37 +209,79 @@ def smooth_path(points: list, scale: int) -> list:
     return smoothed
 
 
-def draw_overlay_image(
-    output_path: str,
+def render_overlay_frames(
+    output_dir: str,
     points: list,
     width: int,
     height: int,
+    duration: float,
+    output_fps: int,
+    source_fps: float,
     scale: int,
     line_width: int,
     glow_intensity: int,
     start_color: str,
     end_color: str,
 ) -> None:
+    total_frames = max(1, int(duration * output_fps))
     img_size = (width * scale, height * scale) if scale > 1 else (width, height)
     img = Image.new("RGBA", img_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     scaled_points = smooth_path(points, scale)
+    last_visible_count = 0
+
+    for frame_idx in range(total_frames):
+        source_frame = (frame_idx / output_fps) * source_fps
+        visible_count = count_visible_points(points, source_frame)
+
+        if visible_count > last_visible_count:
+            draw_tracer_segments(
+                draw,
+                scaled_points,
+                max(0, last_visible_count * 4 - 1),
+                min(len(scaled_points) - 1, visible_count * 4),
+                line_width,
+                glow_intensity,
+                start_color,
+                end_color,
+                scale
+            )
+            last_visible_count = visible_count
+
+        frame = img.resize((width, height), Image.LANCZOS) if scale > 1 else img
+        frame.save(os.path.join(output_dir, f"overlay_{frame_idx + 1:05d}.png"))
+
+
+def draw_tracer_segments(
+    draw,
+    scaled_points: list,
+    start_index: int,
+    end_index: int,
+    line_width: int,
+    glow_intensity: int,
+    start_color: str,
+    end_color: str,
+    scale: int,
+) -> None:
+    if end_index <= start_index:
+        return
 
     if glow_intensity > 0:
         for layer in range(2, 0, -1):
             alpha = int(50 / layer)
             glow_width = line_width + glow_intensity * layer * 0.6
             draw.line(
-                scaled_points,
+                scaled_points[start_index:end_index + 1],
                 fill=hex_to_rgba(start_color, alpha),
                 width=max(1, int(glow_width * scale)),
                 joint="curve"
             )
 
-    for i in range(1, len(scaled_points)):
+    total_segments = max(1, len(scaled_points) - 1)
+    for i in range(max(1, start_index + 1), end_index + 1):
         p1 = scaled_points[i - 1]
         p2 = scaled_points[i]
-        t = i / (len(scaled_points) - 1)
+        t = i / total_segments
         color = interpolate_color(start_color, end_color, t)
         base_width = line_width * (1 - t * 0.3) * scale
 
@@ -259,66 +293,6 @@ def draw_overlay_image(
             [p2[0] - radius, p2[1] - radius, p2[0] + radius, p2[1] + radius],
             fill=color
         )
-
-    if scale > 1:
-        img = img.resize((width, height), Image.LANCZOS)
-
-    img.save(output_path)
-
-
-def render_reveal_mask(
-    output_path: str,
-    points: list,
-    width: int,
-    height: int,
-    duration: float,
-    output_fps: int,
-    source_fps: float,
-    line_width: int,
-    glow_intensity: int,
-) -> None:
-    total_frames = max(1, int(duration * output_fps))
-    reveal_width = max(8, int((line_width + glow_intensity) * 4))
-    smooth_points = smooth_path(points, 1)
-    point_frames = [
-        round((p["frameIndex"] / source_fps) * output_fps)
-        for p in points
-    ]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        frame_pattern = os.path.join(tmpdir, "mask_%05d.png")
-        mask = Image.new("L", (width, height), 0)
-        draw = ImageDraw.Draw(mask)
-        last_drawn_segment = 0
-
-        for frame_idx in range(total_frames):
-            source_frame = (frame_idx / output_fps) * source_fps
-            visible_count = count_visible_points(points, source_frame)
-
-            if visible_count >= 2:
-                target_segment = min(len(smooth_points) - 1, max(last_drawn_segment, visible_count * 4))
-                if target_segment > last_drawn_segment:
-                    draw.line(
-                        smooth_points[last_drawn_segment:target_segment + 1],
-                        fill=255,
-                        width=reveal_width,
-                        joint="curve"
-                    )
-                    last_drawn_segment = target_segment
-
-            mask.save(frame_pattern % (frame_idx + 1))
-
-        subprocess.run([
-            "ffmpeg",
-            "-y",
-            "-framerate", str(output_fps),
-            "-i", frame_pattern,
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "0",
-            "-pix_fmt", "yuv420p",
-            output_path
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def count_visible_points(points: list, source_frame: float) -> int:
