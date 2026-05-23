@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:modal": "cd modal-backend && uv run modal deploy render.py"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

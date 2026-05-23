@@ -24,6 +24,7 @@ interface ControlPoint {
 }
 
 const CONTROL_EDGE_MARGIN = 0.035
+const OFFSCREEN_CONTROL_MARGIN = 0.25
 
 interface TraceEditorProps {
   points: TrackPoint[]
@@ -96,12 +97,13 @@ export function TraceEditor({
 
   const clampControlPoint = useCallback((point: ControlPoint): ControlPoint => {
     const marginX = videoWidth * CONTROL_EDGE_MARGIN
-    const marginY = videoHeight * CONTROL_EDGE_MARGIN
+    const topMargin = -videoHeight * OFFSCREEN_CONTROL_MARGIN
+    const bottomMargin = videoHeight * (1 - CONTROL_EDGE_MARGIN)
 
     return {
       ...point,
       x: Math.max(marginX, Math.min(videoWidth - marginX, point.x)),
-      y: Math.max(marginY, Math.min(videoHeight - marginY, point.y))
+      y: Math.max(topMargin, Math.min(bottomMargin, point.y))
     }
   }, [videoWidth, videoHeight])
 
@@ -402,9 +404,12 @@ export function TraceEditor({
 
     // Draw control points
     controlPoints.forEach((cp) => {
-      const { x, y } = toCanvasCoords(cp.x, cp.y)
+      const raw = toCanvasCoords(cp.x, cp.y)
       const isSelected = cp.id === selectedControl
       const radius = isSelected ? 20 : 16
+      const x = raw.x
+      const y = Math.max(radius + 10, Math.min(containerHeight - radius - 10, raw.y))
+      const isOffscreen = raw.y !== y
 
       // Outer ring shadow
       ctx.beginPath()
@@ -428,6 +433,15 @@ export function TraceEditor({
       ctx.strokeStyle = 'white'
       ctx.lineWidth = 3
       ctx.stroke()
+
+      if (isOffscreen) {
+        ctx.beginPath()
+        ctx.moveTo(x - 6, y - radius - 8)
+        ctx.lineTo(x, y - radius - 16)
+        ctx.lineTo(x + 6, y - radius - 8)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'
+        ctx.fill()
+      }
 
       // Label
       ctx.font = 'bold 12px system-ui, sans-serif'

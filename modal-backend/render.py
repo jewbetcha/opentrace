@@ -96,6 +96,7 @@ def render_video(data: dict):
 
         output_path = os.path.join(tmpdir, "output.mp4")
         overlay_path = os.path.join(tmpdir, "overlay.png")
+        mask_path = os.path.join(tmpdir, "mask.mp4")
         draw_overlay_image(
             overlay_path,
             sorted_points,
@@ -107,17 +108,26 @@ def render_video(data: dict):
             start_color,
             end_color
         )
+        render_reveal_mask(
+            mask_path,
+            sorted_points,
+            width,
+            height,
+            duration,
+            output_fps,
+            source_fps,
+            line_width,
+            glow_intensity
+        )
 
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
             "-i", input_path,
-            "-loop", "1",
-            "-framerate", str(output_fps),
-            "-t", str(duration),
             "-i", overlay_path,
+            "-i", mask_path,
             "-filter_complex",
-            f"[1:v]format=rgba,fade=t=in:st={tracer_start_time:.6f}:d={reveal_duration:.6f}:alpha=1[ov];[0:v][ov]overlay=0:0:format=auto:shortest=1[out]",
+            "[1:v]format=rgba[ov];[2:v]format=gray[mask];[ov][mask]alphamerge[revealed];[0:v][revealed]overlay=0:0:format=auto:shortest=1[out]",
             "-map", "[out]",
             "-map", "0:a:0?",
             "-c:v", "libx264",
@@ -254,6 +264,71 @@ def draw_overlay_image(
         img = img.resize((width, height), Image.LANCZOS)
 
     img.save(output_path)
+
+
+def render_reveal_mask(
+    output_path: str,
+    points: list,
+    width: int,
+    height: int,
+    duration: float,
+    output_fps: int,
+    source_fps: float,
+    line_width: int,
+    glow_intensity: int,
+) -> None:
+    total_frames = max(1, int(duration * output_fps))
+    reveal_width = max(8, int((line_width + glow_intensity) * 4))
+    smooth_points = smooth_path(points, 1)
+    point_frames = [
+        round((p["frameIndex"] / source_fps) * output_fps)
+        for p in points
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        frame_pattern = os.path.join(tmpdir, "mask_%05d.png")
+        mask = Image.new("L", (width, height), 0)
+        draw = ImageDraw.Draw(mask)
+        last_drawn_segment = 0
+
+        for frame_idx in range(total_frames):
+            source_frame = (frame_idx / output_fps) * source_fps
+            visible_count = count_visible_points(points, source_frame)
+
+            if visible_count >= 2:
+                target_segment = min(len(smooth_points) - 1, max(last_drawn_segment, visible_count * 4))
+                if target_segment > last_drawn_segment:
+                    draw.line(
+                        smooth_points[last_drawn_segment:target_segment + 1],
+                        fill=255,
+                        width=reveal_width,
+                        joint="curve"
+                    )
+                    last_drawn_segment = target_segment
+
+            mask.save(frame_pattern % (frame_idx + 1))
+
+        subprocess.run([
+            "ffmpeg",
+            "-y",
+            "-framerate", str(output_fps),
+            "-i", frame_pattern,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "0",
+            "-pix_fmt", "yuv420p",
+            output_path
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def count_visible_points(points: list, source_frame: float) -> int:
+    count = 0
+    for point in points:
+        if point["frameIndex"] <= source_frame:
+            count += 1
+        else:
+            break
+    return count
 
 
 def catmull_rom(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
