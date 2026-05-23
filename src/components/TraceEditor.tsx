@@ -23,6 +23,14 @@ interface ControlPoint {
   label: string
 }
 
+interface DragState {
+  id: ControlPoint['id']
+  pointerX: number
+  pointerY: number
+  pointX: number
+  pointY: number
+}
+
 const CONTROL_EDGE_MARGIN = 0.035
 const OFFSCREEN_CONTROL_MARGIN = 0.25
 
@@ -64,7 +72,7 @@ export function TraceEditor({
   const [isDragging, setIsDragging] = useState(false)
   const [isEditMode, setIsEditMode] = useState(true) // Start in edit mode
   const [isPreviewMode, setIsPreviewMode] = useState(false)
-  const dragOffsetRef = useRef({ x: 0, y: 0 })
+  const dragStateRef = useRef<DragState | null>(null)
 
   // Control points for bezier curve
   const [controlPoints, setControlPoints] = useState<ControlPoint[]>([])
@@ -333,13 +341,16 @@ export function TraceEditor({
     const nearestId = findNearestControl(coords.x, coords.y)
     if (nearestId) {
       const selectedPoint = controlPoints.find(cp => cp.id === nearestId)
+      if (!selectedPoint) return
+
       const pointerVideoCoords = toVideoCoords(coords.x, coords.y)
-      dragOffsetRef.current = selectedPoint
-        ? {
-            x: selectedPoint.x - pointerVideoCoords.x,
-            y: selectedPoint.y - pointerVideoCoords.y
-          }
-        : { x: 0, y: 0 }
+      dragStateRef.current = {
+        id: selectedPoint.id,
+        pointerX: pointerVideoCoords.x,
+        pointerY: pointerVideoCoords.y,
+        pointX: selectedPoint.x,
+        pointY: selectedPoint.y
+      }
 
       e.preventDefault()
       setSelectedControl(nearestId)
@@ -348,7 +359,8 @@ export function TraceEditor({
   }, [enabled, isEditMode, findNearestControl, controlPoints, toVideoCoords])
 
   const handleMove = useCallback((e: TouchEvent | MouseEvent) => {
-    if (!isDragging || !selectedControl) return
+    const dragState = dragStateRef.current
+    if (!dragState) return
 
     userHasEditedRef.current = true // Mark that user has made edits
     e.preventDefault()
@@ -356,25 +368,24 @@ export function TraceEditor({
     if (!coords) return
 
     const videoCoords = toVideoCoords(coords.x, coords.y)
-    const dragOffset = dragOffsetRef.current
     const nextControlPoint = clampControlPoint({
-      id: selectedControl as ControlPoint['id'],
-      x: videoCoords.x + dragOffset.x,
-      y: videoCoords.y + dragOffset.y,
+      id: dragState.id,
+      x: dragState.pointX + videoCoords.x - dragState.pointerX,
+      y: dragState.pointY + videoCoords.y - dragState.pointerY,
       label: ''
     })
 
     setControlPoints(prev => {
       const updated = prev.map(cp =>
-        cp.id === selectedControl ? { ...cp, x: nextControlPoint.x, y: nextControlPoint.y } : cp
+        cp.id === dragState.id ? { ...cp, x: nextControlPoint.x, y: nextControlPoint.y } : cp
       )
       regenerateFromControlPoints(updated, params.ballSpeed, params.hangtime)
       return updated
     })
-  }, [isDragging, selectedControl, toVideoCoords, params.ballSpeed, params.hangtime, regenerateFromControlPoints, clampControlPoint])
+  }, [toVideoCoords, params.ballSpeed, params.hangtime, regenerateFromControlPoints, clampControlPoint])
 
   const handleEnd = useCallback(() => {
-    dragOffsetRef.current = { x: 0, y: 0 }
+    dragStateRef.current = null
     setIsDragging(false)
     setSelectedControl(null)
   }, [])
@@ -389,14 +400,14 @@ export function TraceEditor({
     const moveHandler = (e: TouchEvent | MouseEvent) => handleMove(e)
     const endHandler = () => handleEnd()
 
-    canvas.addEventListener('touchmove', moveHandler, { passive: false })
-    canvas.addEventListener('mousemove', moveHandler as EventListener, { passive: false })
+    window.addEventListener('touchmove', moveHandler, { passive: false })
+    window.addEventListener('mousemove', moveHandler as EventListener, { passive: false })
     window.addEventListener('touchend', endHandler)
     window.addEventListener('mouseup', endHandler)
 
     return () => {
-      canvas.removeEventListener('touchmove', moveHandler)
-      canvas.removeEventListener('mousemove', moveHandler as EventListener)
+      window.removeEventListener('touchmove', moveHandler)
+      window.removeEventListener('mousemove', moveHandler as EventListener)
       window.removeEventListener('touchend', endHandler)
       window.removeEventListener('mouseup', endHandler)
     }
