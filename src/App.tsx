@@ -33,6 +33,7 @@ export default function App() {
   const [tracerColor, setTracerColor] = useState('#3B82F6')
   const [tracerSpeed, setTracerSpeed] = useState(1.0)
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     const id = Date.now()
@@ -73,7 +74,14 @@ export default function App() {
   }, [videoMeta])
 
   const handleUpload = useCallback(async (file: File) => {
-    setVideoUrl(URL.createObjectURL(file))
+    const nextVideoUrl = URL.createObjectURL(file)
+
+    if (videoUrl) {
+      URL.revokeObjectURL(videoUrl)
+    }
+
+    setUploadError(null)
+    setVideoUrl(nextVideoUrl)
     setVideoFile(file)
     setAppState({ type: 'loading' })
 
@@ -82,9 +90,13 @@ export default function App() {
       setAppState({ type: 'creating' })
     } catch (err) {
       console.error('Failed to load video:', err)
+      URL.revokeObjectURL(nextVideoUrl)
+      setVideoUrl(null)
+      setVideoFile(null)
+      setUploadError(err instanceof Error ? err.message : 'Failed to load video')
       setAppState({ type: 'idle' })
     }
-  }, [loadVideoFile])
+  }, [loadVideoFile, videoUrl])
 
   const handleFrameChange = useCallback((frame: number) => {
     setCurrentFrame(frame)
@@ -145,12 +157,14 @@ export default function App() {
     setPoints([])
     setCurrentFrame(0)
     setTracerColor('#3B82F6')
+    setTracerSpeed(1.0)
+    setUploadError(null)
     setAppState({ type: 'idle' })
   }, [videoUrl])
 
   // Render based on state
   if (appState.type === 'idle') {
-    return <VideoUploader onUpload={handleUpload} />
+    return <VideoUploader onUpload={handleUpload} error={uploadError} />
   }
 
   if (appState.type === 'loading') {
@@ -267,6 +281,7 @@ export default function App() {
               videoHeight={metadata.height}
               containerWidth={containerSize.width}
               containerHeight={containerSize.height}
+              fps={metadata.fps}
               totalFrames={metadata.frameCount}
               tracerColor={tracerColor}
               initialBallSpeed={tracerSpeed}

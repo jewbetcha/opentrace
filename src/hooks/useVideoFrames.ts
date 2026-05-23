@@ -27,7 +27,11 @@ export function useVideoFrames(): UseVideoFramesReturn {
       setVideo(loadedVideo)
       setMetadata(videoMetadata)
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to load video'))
+      const error = err instanceof Error ? err : new Error('Failed to load video')
+      setError(error)
+      setVideo(null)
+      setMetadata(null)
+      throw error
     } finally {
       setIsLoading(false)
     }

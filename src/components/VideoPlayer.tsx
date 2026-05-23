@@ -37,6 +37,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationRef = useRef<number>(0)
+  const currentFrameRef = useRef(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const [totalFrames, setTotalFrames] = useState(0)
@@ -51,17 +52,58 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
     seekToFrame: (frame: number) => {
       const video = videoRef.current
       if (video) {
-        video.currentTime = frame / fps
+        video.currentTime = Math.max(0, Math.min(video.duration, frame / fps))
       }
     }
   }), [currentFrame, fps])
+
+  const updateCurrentFrame = useCallback((frame: number) => {
+    if (frame === currentFrameRef.current) return
+
+    currentFrameRef.current = frame
+    setCurrentFrame(frame)
+    onFrameChange?.(frame)
+  }, [onFrameChange])
+
+  const drawFrame = useCallback(() => {
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    if (!video || !canvas || !video.videoWidth || !video.videoHeight) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
+
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+    }
+
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    } catch {
+      return
+    }
+
+    const frame = Math.floor(video.currentTime * fps)
+    updateCurrentFrame(frame)
+
+    if (points.length === 0) return
+
+    const tracerFrame = showFullTracer && video.paused
+      ? points[points.length - 1].frameIndex
+      : frame
+    drawTracer(ctx, points, tracerFrame, tracerStyle)
+  }, [fps, points, showFullTracer, tracerStyle, updateCurrentFrame])
 
   // Initialize video - iOS requires special handling to decode first frame
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
+    let isCancelled = false
     setVideoReady(false)
+    setCurrentFrame(0)
+    currentFrameRef.current = 0
 
     const initializeVideo = async () => {
       // Wait for metadata
@@ -74,6 +116,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
           video.addEventListener('loadedmetadata', onLoaded)
         })
       }
+
+      if (isCancelled) return
 
       setTotalFrames(Math.floor(video.duration * fps))
       setVideoDimensions({ width: video.videoWidth, height: video.videoHeight })
@@ -93,60 +137,44 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       // Wait a frame for iOS to process
       await new Promise(resolve => setTimeout(resolve, 100))
 
-      setVideoReady(true)
+      if (!isCancelled) {
+        setVideoReady(true)
+      }
     }
 
     video.load()
     initializeVideo()
+
+    return () => {
+      isCancelled = true
+    }
   }, [fps, videoUrl])
 
-  // Render loop - draw video frame + tracer to canvas
   useEffect(() => {
     const video = videoRef.current
-    const canvas = canvasRef.current
-    if (!video || !canvas || !videoReady) return
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!video || !videoReady) return
 
     const render = () => {
-      const frame = Math.floor(video.currentTime * fps)
-
-      if (frame !== currentFrame) {
-        setCurrentFrame(frame)
-        onFrameChange?.(frame)
-      }
-
-      // Update canvas size if needed
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth || 1920
-        canvas.height = video.videoHeight || 1080
-      }
-
-      // Draw video frame to canvas (this works reliably on iOS)
-      if (video.readyState >= 2) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      }
-
-      // Draw tracer overlay
-      if (points.length > 0) {
-        const tracerFrame = (showFullTracer && video.paused)
-          ? points[points.length - 1].frameIndex
-          : frame
-        drawTracer(ctx, points, tracerFrame, tracerStyle)
-      }
-
+      drawFrame()
       animationRef.current = requestAnimationFrame(render)
     }
 
+    const drawOnMediaEvent = () => requestAnimationFrame(drawFrame)
+
+    video.addEventListener('loadeddata', drawOnMediaEvent)
+    video.addEventListener('seeked', drawOnMediaEvent)
+    video.addEventListener('timeupdate', drawOnMediaEvent)
     animationRef.current = requestAnimationFrame(render)
 
     return () => {
+      video.removeEventListener('loadeddata', drawOnMediaEvent)
+      video.removeEventListener('seeked', drawOnMediaEvent)
+      video.removeEventListener('timeupdate', drawOnMediaEvent)
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [fps, points, tracerStyle, onFrameChange, currentFrame, showFullTracer, videoReady])
+  }, [drawFrame, videoReady])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
@@ -155,7 +183,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
     if (isPlaying) {
       video.pause()
     } else {
-      video.play()
+      video.play().catch(() => setIsPlaying(false))
     }
     setIsPlaying(!isPlaying)
   }, [isPlaying])
@@ -168,7 +196,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
     setIsPlaying(false)
     const newTime = Math.max(0, Math.min(video.duration, video.currentTime + delta / fps))
     video.currentTime = newTime
-  }, [fps])
+    updateCurrentFrame(Math.floor(newTime * fps))
+  }, [fps, updateCurrentFrame])
 
   const seekToProgress = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     const video = videoRef.current
@@ -178,8 +207,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
     const rect = target.getBoundingClientRect()
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
     const progress = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    video.currentTime = progress * video.duration
-  }, [])
+    const nextTime = progress * video.duration
+    video.currentTime = nextTime
+    updateCurrentFrame(Math.floor(nextTime * fps))
+  }, [fps, updateCurrentFrame])
 
   const handleInteraction = useCallback(() => {
     setShowControls(true)
@@ -201,11 +232,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       onTouchStart={handleInteraction}
       onMouseMove={handleInteraction}
     >
-      {/* Hidden video element - used for playback control only */}
+      {/* Keep the video decodable for Safari; display:none can make canvas draws go black. */}
       <video
         ref={videoRef}
         src={videoUrl}
-        className="hidden"
+        className="absolute inset-0 h-full w-full object-contain opacity-0 pointer-events-none"
         playsInline
         webkit-playsinline="true"
         muted

@@ -87,7 +87,7 @@ export function ManualTracerCreator({
 
     // Calculate physics-based frame counts
     const { riseFrames, apexFrames, fallFrames, totalFrames: flightTotal } = calculateFlightFrames(
-      startY, apexY, endY, ballSpeed, hangtime
+      startY, apexY, endY, ballSpeed, hangtime, fps
     )
 
     const maxFrames = totalFrames - impactFrame - 1
@@ -114,7 +114,7 @@ export function ManualTracerCreator({
     }
 
     return points
-  }, [params, videoWidth, videoHeight, pointsSet, mode, totalFrames])
+  }, [params, videoWidth, videoHeight, pointsSet, mode, totalFrames, fps])
 
   const previewPoints = generateTrajectory()
 

@@ -2,8 +2,6 @@ import modal
 import subprocess
 import tempfile
 import os
-import json
-from pathlib import Path
 
 app = modal.App("opentrace-render")
 
@@ -30,11 +28,15 @@ def render_video(data: dict):
     """
     import base64
     from PIL import Image, ImageDraw
-    import io
     import time
 
     total_start = time.time()
     print(f"[RENDER] Starting render job (optimized pipeline)")
+
+    required_fields = {"video_base64", "points", "width", "height", "duration"}
+    missing_fields = sorted(required_fields - data.keys())
+    if missing_fields:
+        return {"error": f"Missing required fields: {', '.join(missing_fields)}"}
 
     video_base64 = data["video_base64"]
     points = data["points"]
@@ -54,10 +56,21 @@ def render_video(data: dict):
     print(f"[RENDER] Points: {len(points)} tracer points")
     print(f"[RENDER] Input size: {len(video_base64) / 1024 / 1024:.2f} MB (base64)")
 
+    if not points or len(points) < 2:
+        return {"error": "At least two tracer points are required"}
+
+    if source_fps <= 0 or output_fps <= 0:
+        return {"error": "FPS values must be greater than zero"}
+
     fps_scale = output_fps / source_fps
     total_frames = int(duration * output_fps)
     line_width = style.get("lineWidth", 4)
     glow_intensity = style.get("glowIntensity", 10)
+    start_color = style.get("startColor", "#FFD700")
+    end_color = style.get("endColor", "#FF4500")
+
+    if total_frames <= 0:
+        return {"error": "Video duration must be greater than zero"}
 
     # Adaptive supersampling
     total_pixels = width * height
@@ -77,7 +90,11 @@ def render_video(data: dict):
         # Write input video
         step_start = time.time()
         input_path = os.path.join(tmpdir, "input.mp4")
-        video_bytes = base64.b64decode(video_base64)
+        try:
+            video_bytes = base64.b64decode(video_base64)
+        except Exception as exc:
+            return {"error": f"Invalid base64 video payload: {exc}"}
+
         with open(input_path, "wb") as f:
             f.write(video_bytes)
         print(f"[RENDER] Input video ready: {len(video_bytes) / 1024 / 1024:.2f} MB in {time.time() - step_start:.2f}s")
@@ -134,91 +151,85 @@ def render_video(data: dict):
         empty_frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         empty_frame_bytes = empty_frame.tobytes()
 
-        for frame_idx in range(total_frames):
-            # Log progress every 10%
-            progress_pct = int((frame_idx / total_frames) * 100)
-            if progress_pct >= last_progress_log + 10:
-                elapsed = time.time() - frame_gen_start
-                fps_rate = frame_idx / elapsed if elapsed > 0 else 0
-                remaining = (total_frames - frame_idx) / fps_rate if fps_rate > 0 else 0
-                print(f"[RENDER] Progress: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} fps, ~{remaining:.1f}s remaining")
-                last_progress_log = progress_pct
+        try:
+            for frame_idx in range(total_frames):
+                # Log progress every 10%
+                progress_pct = int((frame_idx / total_frames) * 100)
+                if progress_pct >= last_progress_log + 10:
+                    elapsed = time.time() - frame_gen_start
+                    fps_rate = frame_idx / elapsed if elapsed > 0 else 0
+                    remaining = (total_frames - frame_idx) / fps_rate if fps_rate > 0 else 0
+                    print(f"[RENDER] Progress: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} fps, ~{remaining:.1f}s remaining")
+                    last_progress_log = progress_pct
 
-            source_frame_idx = frame_idx / fps_scale
-            visible_points = [p for p in points if p["frameIndex"] <= source_frame_idx]
+                source_frame_idx = frame_idx / fps_scale
+                visible_points = [p for p in points if p["frameIndex"] <= source_frame_idx]
 
-            # For frames without tracer, send pre-computed empty frame
-            if len(visible_points) < 2:
-                proc.stdin.write(empty_frame_bytes)
-                continue
+                if len(visible_points) < 2:
+                    proc.stdin.write(empty_frame_bytes)
+                    continue
 
-            frames_with_content += 1
+                frames_with_content += 1
 
-            # Create frame with tracer
-            if scale > 1:
-                img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
-            else:
-                img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
+                img_size = (width * scale, height * scale) if scale > 1 else (width, height)
+                img = Image.new("RGBA", img_size, (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
 
-            # Draw glow - reduced to 2 layers for speed
-            if glow_intensity > 0:
-                for layer in range(2, 0, -1):  # 2 glow layers instead of 3
-                    alpha = int(50 / layer)
-                    glow_width = line_width + glow_intensity * layer * 0.6
+                if glow_intensity > 0:
+                    for layer in range(2, 0, -1):
+                        alpha = int(50 / layer)
+                        glow_width = line_width + glow_intensity * layer * 0.6
 
-                    for i in range(1, len(visible_points)):
-                        p1 = visible_points[i - 1]
-                        p2 = visible_points[i]
-                        t = i / (len(visible_points) - 1) if len(visible_points) > 1 else 0
-                        color = interpolate_color(style["startColor"], style["endColor"], t)
-                        glow_color = color[:3] + (alpha,)
+                        for i in range(1, len(visible_points)):
+                            p1 = visible_points[i - 1]
+                            p2 = visible_points[i]
+                            t = i / (len(visible_points) - 1)
+                            color = interpolate_color(start_color, end_color, t)
+                            glow_color = color[:3] + (alpha,)
 
-                        draw.line(
-                            [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                            fill=glow_color,
-                            width=int(glow_width * scale)
-                        )
+                            draw.line(
+                                [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                                fill=glow_color,
+                                width=max(1, int(glow_width * scale))
+                            )
 
-            # Draw main tracer line
-            for i in range(1, len(visible_points)):
-                p1 = visible_points[i - 1]
-                p2 = visible_points[i]
-                t = i / (len(visible_points) - 1) if len(visible_points) > 1 else 0
-                color = interpolate_color(style["startColor"], style["endColor"], t)
-                base_width = line_width * (1 - t * 0.3) * scale
+                for i in range(1, len(visible_points)):
+                    p1 = visible_points[i - 1]
+                    p2 = visible_points[i]
+                    t = i / (len(visible_points) - 1)
+                    color = interpolate_color(start_color, end_color, t)
+                    base_width = line_width * (1 - t * 0.3) * scale
 
-                # Core line with slight outer glow
-                outer_color = color[:3] + (150,)
-                draw.line(
-                    [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                    fill=outer_color,
-                    width=int(base_width * 1.2)
-                )
-                draw.line(
-                    [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                    fill=color,
-                    width=int(base_width)
-                )
+                    draw.line(
+                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                        fill=color[:3] + (150,),
+                        width=max(1, int(base_width * 1.2))
+                    )
+                    draw.line(
+                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
+                        fill=color,
+                        width=max(1, int(base_width))
+                    )
 
-                # Joint circle
-                radius = int(base_width * 0.4)
-                draw.ellipse(
-                    [p2["x"] * scale - radius, p2["y"] * scale - radius,
-                     p2["x"] * scale + radius, p2["y"] * scale + radius],
-                    fill=color
-                )
+                    radius = max(1, int(base_width * 0.4))
+                    draw.ellipse(
+                        [p2["x"] * scale - radius, p2["y"] * scale - radius,
+                         p2["x"] * scale + radius, p2["y"] * scale + radius],
+                        fill=color
+                    )
 
-            # Downscale if supersampled
-            if scale > 1:
-                img = img.resize((width, height), Image.LANCZOS)
+                if scale > 1:
+                    img = img.resize((width, height), Image.LANCZOS)
 
-            # Write raw RGBA bytes directly to FFmpeg pipe
-            proc.stdin.write(img.tobytes())
+                proc.stdin.write(img.tobytes())
+        except BrokenPipeError:
+            print("[RENDER] FFmpeg pipe closed before all frames were written")
+        finally:
+            if proc.stdin:
+                proc.stdin.close()
+                proc.stdin = None
 
-        # Close stdin and wait for FFmpeg to finish
-        proc.stdin.close()
-        stdout, stderr = proc.communicate()
+        _, stderr = proc.communicate()
 
         frame_gen_elapsed = time.time() - frame_gen_start
         ffmpeg_elapsed = time.time() - ffmpeg_start
@@ -233,7 +244,6 @@ def render_video(data: dict):
         print(f"[RENDER] FFmpeg total time: {ffmpeg_elapsed:.2f}s")
 
         # Read output and return as base64
-        encode_start = time.time()
         with open(output_path, "rb") as f:
             output_bytes = f.read()
         output_base64 = base64.b64encode(output_bytes).decode("utf-8")

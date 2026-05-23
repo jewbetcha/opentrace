@@ -3,9 +3,10 @@ import { useCallback, useState, useRef } from 'react'
 interface VideoUploaderProps {
   onUpload: (file: File) => void
   isLoading?: boolean
+  error?: string | null
 }
 
-export function VideoUploader({ onUpload, isLoading = false }: VideoUploaderProps) {
+export function VideoUploader({ onUpload, isLoading = false, error }: VideoUploaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -186,6 +187,11 @@ export function VideoUploader({ onUpload, isLoading = false }: VideoUploaderProp
             <p className="text-sm text-neutral-500">
               {isDragging ? 'Release to start processing' : 'Drag & drop or tap to select video'}
             </p>
+            {error && (
+              <p className="mt-3 text-sm text-red-300">
+                {error}
+              </p>
+            )}
           </div>
 
           {/* Upload icon indicator */}

@@ -30,6 +30,30 @@ function downloadFile(blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 32768
+  let binary = ''
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+
+  return btoa(binary)
+}
+
+function base64ToBlob(base64: string, type: string): Blob {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+
+  return new Blob([bytes], { type })
+}
+
 export function useVideoExport(): UseVideoExportReturn {
   const [isExporting, setIsExporting] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -54,6 +78,14 @@ export function useVideoExport(): UseVideoExportReturn {
     abortRef.current = new AbortController()
 
     try {
+      if (!MODAL_ENDPOINT) {
+        throw new Error('Export is not configured. Set VITE_MODAL_ENDPOINT to your Modal render endpoint.')
+      }
+
+      if (points.length < 2) {
+        throw new Error('Add a tracer before exporting.')
+      }
+
       // Check file size - warn if large
       const fileSizeMB = videoFile.size / (1024 * 1024)
       if (fileSizeMB > 100) {
@@ -63,18 +95,7 @@ export function useVideoExport(): UseVideoExportReturn {
       // Convert video to base64
       setProgress(0.05)
       const videoBuffer = await videoFile.arrayBuffer()
-
-      // Convert to base64 in chunks to avoid memory issues
-      const bytes = new Uint8Array(videoBuffer)
-      let videoBase64 = ''
-      const chunkSize = 32768
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-        videoBase64 += String.fromCharCode.apply(null, Array.from(chunk))
-        // Update progress during encoding
-        setProgress(0.05 + (i / bytes.length) * 0.15)
-      }
-      videoBase64 = btoa(videoBase64)
+      const videoBase64 = arrayBufferToBase64(videoBuffer)
       setProgress(0.2)
 
       // Prepare request payload
@@ -113,7 +134,8 @@ export function useVideoExport(): UseVideoExportReturn {
       setProgress(0.8)
 
       if (!response.ok) {
-        throw new Error(`Export failed: ${response.statusText}`)
+        const message = await response.text()
+        throw new Error(message || `Export failed: ${response.statusText}`)
       }
 
       const result = await response.json()
@@ -124,13 +146,11 @@ export function useVideoExport(): UseVideoExportReturn {
 
       setProgress(0.9)
 
-      // Convert base64 response to blob
-      const outputBytes = atob(result.video_base64)
-      const outputArray = new Uint8Array(outputBytes.length)
-      for (let i = 0; i < outputBytes.length; i++) {
-        outputArray[i] = outputBytes.charCodeAt(i)
+      if (!result.video_base64) {
+        throw new Error('Export failed: backend did not return a video.')
       }
-      const outputBlob = new Blob([outputArray], { type: 'video/mp4' })
+
+      const outputBlob = base64ToBlob(result.video_base64, 'video/mp4')
 
       // Download the file directly
       // Note: On iOS, this saves to Files app. User can then save to Photos from there.

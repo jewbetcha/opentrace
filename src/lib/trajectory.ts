@@ -1,13 +1,3 @@
-// =============================================================================
-// TRACKMAN-STYLE CUBIC BEZIER TRAJECTORY
-// =============================================================================
-//
-// Key characteristics from real Trackman:
-// - Rise is nearly STRAIGHT (bullet-like trajectory)
-// - Apex is SHARP (distinct peak)
-// - Fall is STEEP and SHORT (drops almost vertically)
-// - Apex occurs at ~80% of horizontal distance
-
 export interface Point2D {
   x: number
   y: number
@@ -20,27 +10,24 @@ export interface BezierControlPoints {
   p3: Point2D  // End
 }
 
-// === TRACKMAN CONSTANTS ===
-// Centralized so all components use the same values
 export const TRACKMAN = {
-  // Control point positioning
-  APEX_X_RATIO: 0.82,           // Apex at 82% of horizontal distance (long rise)
-  LAUNCH_FACTOR_BASE: 0.45,     // Base launch factor (lowered for more hangtime range)
-  LAUNCH_FACTOR_HANGTIME: 0.50, // Hangtime contribution (0.45 to 0.95 range)
-  DESCENT_X_RATIO: 0.96,        // P2 at 96% horizontal (very close to end = steep drop)
-  CURVE_FACTOR_P1: 0.03,        // Curve effect on launch control
-  CURVE_FACTOR_P2: 0.05,        // Curve effect on descent control
+  APEX_X_RATIO: 0.78,
+  LAUNCH_FACTOR_BASE: 0.42,
+  LAUNCH_FACTOR_HANGTIME: 0.38,
+  DESCENT_X_RATIO: 0.97,
+  CURVE_FACTOR_P1: 0.025,
+  CURVE_FACTOR_P2: 0.055,
 
-  // Bezier t-mapping for "long rise, quick fall" effect
-  // These control how the ball moves along the curve over time
-  T_RISE_END: 0.50,             // Rise phase uses 0 to 0.50 of curve (50%)
-  T_APEX_END: 0.85,             // Apex phase uses 0.50 to 0.85 of curve (35% hang time!)
-  // Fall phase uses 0.85 to 1.0 (only 15% of curve = very steep fast drop)
+  T_RISE_END: 0.58,
+  T_APEX_END: 0.86,
 
-  // Frame timing constants
-  BASE_RISE_FRAMES: 50,         // Frames for rise
-  HANGTIME_FRAMES: 70,          // Much more frames at apex (was 40)
-  GRAVITY_SCALE: 8,             // Even faster fall (lower = fewer frames)
+  MIN_FLIGHT_SECONDS: 0.5,
+  MAX_FLIGHT_SECONDS: 3.2,
+  BASE_FLIGHT_SECONDS: 0.75,
+  HEIGHT_SECONDS: 1.05,
+  HANGTIME_SECONDS: 0.45,
+  MIN_BALL_SPEED: 0.45,
+  MAX_BALL_SPEED: 2.4
 }
 
 export interface TrackmanParams {
@@ -55,49 +42,30 @@ export interface TrackmanParams {
   videoHeight: number
 }
 
-/**
- * Calculate Trackman-style cubic Bezier control points
- */
 export function calculateTrackmanControlPoints(params: TrackmanParams): BezierControlPoints {
   const { startX, startY, endX, endY, peakHeight, curve, hangtime, videoWidth, videoHeight } = params
 
   const dx = endX - startX
-
-  // Apex height in screen coords (up is negative Y)
   const apexHeight = peakHeight * videoHeight
   const apexY = Math.min(startY, endY) - apexHeight
-
-  // Apex occurs at 80% of horizontal distance (Trackman style)
   const apexX = startX + dx * TRACKMAN.APEX_X_RATIO
 
-  // P0: Start
   const p0 = { x: startX, y: startY }
-
-  // P3: End
   const p3 = { x: endX, y: endY }
-
-  // P1: Launch control - MUST use same factor for x and y for straight trajectory
-  // launchFactor range: 0.55 to 0.90 based on hangtime
   const launchFactor = TRACKMAN.LAUNCH_FACTOR_BASE + hangtime * TRACKMAN.LAUNCH_FACTOR_HANGTIME
   const p1 = {
     x: startX + (apexX - startX) * launchFactor + curve * videoWidth * TRACKMAN.CURVE_FACTOR_P1,
-    y: startY - apexHeight * launchFactor  // Same factor = straight line toward apex
+    y: startY - apexHeight * launchFactor
   }
 
-  // P2: Descent control - very close to end horizontally, but at apex height
-  // This creates the sharp peak and steep drop
   const p2 = {
     x: startX + dx * TRACKMAN.DESCENT_X_RATIO + curve * videoWidth * TRACKMAN.CURVE_FACTOR_P2,
-    y: apexY  // At apex height = sharp corner before dropping
+    y: apexY
   }
 
   return { p0, p1, p2, p3 }
 }
 
-/**
- * Evaluate cubic Bezier curve at parameter t
- * B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
- */
 export function evaluateBezier(t: number, cp: BezierControlPoints): Point2D {
   const { p0, p1, p2, p3 } = cp
   const u = 1 - t
@@ -112,9 +80,6 @@ export function evaluateBezier(t: number, cp: BezierControlPoints): Point2D {
   }
 }
 
-/**
- * Generate a full trajectory as an array of points
- */
 export function generateBezierPoints(cp: BezierControlPoints, numPoints: number = 60): Point2D[] {
   const points: Point2D[] = []
   for (let i = 0; i <= numPoints; i++) {
@@ -124,11 +89,6 @@ export function generateBezierPoints(cp: BezierControlPoints, numPoints: number 
   return points
 }
 
-/**
- * Calculate physics-based frame timing for animation
- * Returns the t parameter for the Bezier curve based on frame index
- * Uses TRACKMAN constants for "long rise, quick fall" effect
- */
 export function calculateBezierT(
   frameIndex: number,
   riseFrames: number,
@@ -136,52 +96,72 @@ export function calculateBezierT(
   fallFrames: number
 ): number {
   const { T_RISE_END, T_APEX_END } = TRACKMAN
-  const T_APEX_DURATION = T_APEX_END - T_RISE_END  // ~0.23
-  const T_FALL_DURATION = 1.0 - T_APEX_END         // ~0.22
+  const apexStartFrame = riseFrames
+  const fallStartFrame = riseFrames + apexFrames
 
-  if (frameIndex <= riseFrames) {
-    // Rise phase: long straight trajectory up
-    const riseProgress = frameIndex / riseFrames
-    return riseProgress * T_RISE_END
-  } else if (frameIndex <= riseFrames + apexFrames) {
-    // Apex phase: ball hangs at the top
-    const apexProgress = (frameIndex - riseFrames) / Math.max(1, apexFrames)
-    return T_RISE_END + apexProgress * T_APEX_DURATION
-  } else {
-    // Fall phase: steep fast drop (compressed into small portion of curve)
-    const fallProgress = (frameIndex - riseFrames - apexFrames) / fallFrames
-    return T_APEX_END + fallProgress * T_FALL_DURATION
+  if (frameIndex <= apexStartFrame) {
+    const progress = frameIndex / Math.max(1, riseFrames)
+    return easeOutCubic(progress) * T_RISE_END
   }
+
+  if (frameIndex <= fallStartFrame) {
+    const progress = (frameIndex - apexStartFrame) / Math.max(1, apexFrames)
+    return lerp(T_RISE_END, T_APEX_END, smoothstep(progress))
+  }
+
+  const progress = (frameIndex - fallStartFrame) / Math.max(1, fallFrames)
+  return lerp(T_APEX_END, 1, easeInCubic(progress))
 }
 
-/**
- * Calculate frame counts based on physics
- * Uses TRACKMAN constants for timing
- */
 export function calculateFlightFrames(
   startY: number,
   apexY: number,
   endY: number,
   ballSpeed: number,
-  hangtime: number
+  hangtime: number,
+  fps: number = 60
 ): { riseFrames: number; apexFrames: number; fallFrames: number; totalFrames: number } {
-  const { BASE_RISE_FRAMES, HANGTIME_FRAMES, GRAVITY_SCALE } = TRACKMAN
-
   const rise = Math.max(10, startY - apexY)
   const fall = Math.max(10, endY - apexY)
+  const heightRatio = Math.sqrt((rise + fall) / 600)
+  const speed = clamp(ballSpeed, TRACKMAN.MIN_BALL_SPEED, TRACKMAN.MAX_BALL_SPEED)
+  const hang = clamp(hangtime, 0, 1)
 
-  // Rise: more frames for longer upward trajectory
-  const riseFrames = Math.max(5, Math.round((BASE_RISE_FRAMES / ballSpeed) * Math.sqrt(rise / 100)))
+  const flightSeconds = clamp(
+    (TRACKMAN.BASE_FLIGHT_SECONDS + heightRatio * TRACKMAN.HEIGHT_SECONDS + hang * TRACKMAN.HANGTIME_SECONDS) / speed,
+    TRACKMAN.MIN_FLIGHT_SECONDS,
+    TRACKMAN.MAX_FLIGHT_SECONDS
+  )
 
-  // Apex: hangtime scales with BOTH slider AND apex height
-  // Higher shots naturally have more hang time (ball moving slower at apex)
-  const heightFactor = Math.sqrt(rise / 100)  // Higher apex = more hang
-  const apexFrames = Math.round(hangtime * HANGTIME_FRAMES * (0.5 + heightFactor * 0.5))
+  const totalFrames = Math.max(6, Math.round(flightSeconds * Math.max(1, fps)))
+  const apexFrameShare = clamp(0.04 + hang * 0.09, 0.04, 0.13)
+  const riseFrameShare = clamp(0.62 + hang * 0.08 - Math.max(0, fall - rise) / 4000, 0.55, 0.72)
+  const apexFrames = Math.max(1, Math.round(totalFrames * apexFrameShare))
+  const riseFrames = Math.max(2, Math.round(totalFrames * riseFrameShare))
+  const fallFrames = Math.max(2, totalFrames - riseFrames - apexFrames)
 
-  // Fall: gravity accelerates - fewer frames for quick drop
-  const fallFrames = Math.max(3, Math.round(GRAVITY_SCALE * Math.sqrt(fall / 100)))
+  return { riseFrames, apexFrames, fallFrames, totalFrames: riseFrames + apexFrames + fallFrames }
+}
 
-  const totalFrames = riseFrames + apexFrames + fallFrames
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
 
-  return { riseFrames, apexFrames, fallFrames, totalFrames }
+function lerp(start: number, end: number, progress: number): number {
+  return start + (end - start) * clamp(progress, 0, 1)
+}
+
+function smoothstep(progress: number): number {
+  const t = clamp(progress, 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
+function easeOutCubic(progress: number): number {
+  const t = 1 - clamp(progress, 0, 1)
+  return 1 - t * t * t
+}
+
+function easeInCubic(progress: number): number {
+  const t = clamp(progress, 0, 1)
+  return t * t * t
 }

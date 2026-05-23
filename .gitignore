@@ -23,6 +23,10 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Python
+__pycache__/
+*.py[cod]
+
 # ONNX model in public (generated)
 public/models/*.onnx
 

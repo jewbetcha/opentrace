@@ -29,6 +29,7 @@ interface TraceEditorProps {
   videoHeight: number
   containerWidth: number
   containerHeight: number
+  fps: number
   totalFrames: number
   tracerColor: string
   initialBallSpeed: number
@@ -44,6 +45,7 @@ export function TraceEditor({
   videoHeight,
   containerWidth,
   containerHeight,
+  fps,
   totalFrames,
   tracerColor,
   initialBallSpeed,
@@ -153,7 +155,7 @@ export function TraceEditor({
 
     // Calculate physics-based frame counts using shared function
     const { riseFrames, apexFrames, fallFrames, totalFrames: flightTotal } = calculateFlightFrames(
-      startPos.y, apexY, endPointCtrl.y, ballSpeed, hangtime
+      startPos.y, apexY, endPointCtrl.y, ballSpeed, hangtime, fps
     )
 
     const maxFrames = totalFrames - impactFrame - 1
@@ -184,7 +186,7 @@ export function TraceEditor({
     if (userHasEditedRef.current) {
       onPointsUpdate(newPoints)
     }
-  }, [startPos.x, startPos.y, impactFrame, videoWidth, videoHeight, totalFrames, onPointsUpdate])
+  }, [startPos.x, startPos.y, impactFrame, videoWidth, videoHeight, totalFrames, fps, onPointsUpdate])
 
   // Handle slider changes - apply relative adjustments to preserve manual edits
   const handleParamChange = useCallback((key: keyof TracerParams, value: number) => {
