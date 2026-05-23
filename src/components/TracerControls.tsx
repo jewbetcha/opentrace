@@ -78,7 +78,7 @@ export function TracerSliderGrid({ params, onParamChange }: SliderGridProps) {
         label="Height"
         value={params.peakHeight * 100}
         min={0}
-        max={80}
+        max={65}
         onChange={(v) => onParamChange('peakHeight', v / 100)}
         formatValue={(v) => `${Math.round(v)}%`}
       />
@@ -99,8 +99,8 @@ export function TracerSliderGrid({ params, onParamChange }: SliderGridProps) {
         label="Speed"
         value={params.ballSpeed}
         min={0.5}
-        max={10}
-        step={0.5}
+        max={2.4}
+        step={0.1}
         onChange={(v) => onParamChange('ballSpeed', v)}
         formatValue={(v) => `${v.toFixed(1)}x`}
       />
@@ -189,7 +189,7 @@ interface ControlPanelProps {
 
 export function ControlPanel({ children }: ControlPanelProps) {
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm py-3 px-3 border-t border-white/5">
+    <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/95 backdrop-blur-sm pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] px-3 border-t border-white/5">
       <div className="max-w-sm mx-auto space-y-2">
         {children}
       </div>

@@ -23,6 +23,8 @@ interface ControlPoint {
   label: string
 }
 
+const CONTROL_EDGE_MARGIN = 0.035
+
 interface TraceEditorProps {
   points: TrackPoint[]
   videoWidth: number
@@ -92,6 +94,17 @@ export function TraceEditor({
     y: (canvasY - offsetY) / scale
   }), [scale, offsetX, offsetY])
 
+  const clampControlPoint = useCallback((point: ControlPoint): ControlPoint => {
+    const marginX = videoWidth * CONTROL_EDGE_MARGIN
+    const marginY = videoHeight * CONTROL_EDGE_MARGIN
+
+    return {
+      ...point,
+      x: Math.max(marginX, Math.min(videoWidth - marginX, point.x)),
+      y: Math.max(marginY, Math.min(videoHeight - marginY, point.y))
+    }
+  }, [videoWidth, videoHeight])
+
   // Initialize control points from trajectory using Gemini-style positioning
   useEffect(() => {
     if (points.length < 3 || hasInitializedRef.current) return
@@ -128,11 +141,11 @@ export function TraceEditor({
     }
 
     setControlPoints([
-      { id: 'controlUp', x: p1.x, y: p1.y, label: 'Launch' },
-      { id: 'controlDown', x: p2.x, y: p2.y, label: 'Descent' },
-      { id: 'end', x: endPoint.x, y: endPoint.y, label: 'Landing' }
+      clampControlPoint({ id: 'controlUp', x: p1.x, y: p1.y, label: 'Launch' }),
+      clampControlPoint({ id: 'controlDown', x: p2.x, y: p2.y, label: 'Descent' }),
+      clampControlPoint({ id: 'end', x: endPoint.x, y: endPoint.y, label: 'Endpoint' })
     ])
-  }, [points, startPos.x, startPos.y, params.hangtime])
+  }, [points, startPos.x, startPos.y, params.hangtime, clampControlPoint])
 
   // Regenerate trajectory from control points using cubic Bezier
   const regenerateFromControlPoints = useCallback((controls: ControlPoint[], ballSpeed: number, hangtime: number) => {
@@ -163,12 +176,15 @@ export function TraceEditor({
 
     const newPoints: TrackPoint[] = []
 
-    for (let i = 0; i <= flightFrames; i++) {
-      const frameIndex = impactFrame + i
+    const sampleCount = Math.max(1, Math.round(flightFrames * TRACKMAN.SAMPLES_PER_FRAME))
+
+    for (let i = 0; i <= sampleCount; i++) {
+      const frameOffset = i / TRACKMAN.SAMPLES_PER_FRAME
+      const frameIndex = impactFrame + frameOffset
       if (frameIndex >= totalFrames) break
 
       // Use shared function for physics-based timing
-      const t = Math.min(1, Math.max(0, calculateBezierT(i, riseFrames, apexFrames, fallFrames)))
+      const t = Math.min(1, Math.max(0, calculateBezierT(frameOffset, riseFrames, apexFrames, fallFrames)))
 
       // Evaluate Bezier using shared function
       const point = evaluateBezier(t, cp)
@@ -206,10 +222,10 @@ export function TraceEditor({
         if (cp.id === 'end') return cp // Don't move landing point vertically
         // P1 (launch) moves more, P2 (descent) moves less
         const factor = cp.id === 'controlUp' ? 0.9 : 0.7
-        return {
+        return clampControlPoint({
           ...cp,
           y: Math.max(0, Math.min(videoHeight, cp.y - heightDelta * factor))
-        }
+        })
       })
     } else if (key === 'curve') {
       // Adjust X positions based on curve change (draw/fade)
@@ -218,10 +234,10 @@ export function TraceEditor({
         if (cp.id === 'end') return cp // Don't move landing point
         const curveFactor = cp.id === 'controlUp' ? TRACKMAN.CURVE_FACTOR_P1 : TRACKMAN.CURVE_FACTOR_P2
         const curveDelta = (newParams.curve - oldParams.curve) * videoWidth * curveFactor
-        return {
+        return clampControlPoint({
           ...cp,
           x: Math.max(0, Math.min(videoWidth, cp.x + curveDelta))
-        }
+        })
       })
     } else if (key === 'hangtime') {
       // Hangtime adjusts P1's height (affects launch angle/trajectory lift)
@@ -231,10 +247,10 @@ export function TraceEditor({
       const liftDelta = (newParams.hangtime - oldParams.hangtime) * apexHeight * TRACKMAN.LAUNCH_FACTOR_HANGTIME
       newControls = controlPoints.map(cp => {
         if (cp.id === 'controlUp') {
-          return {
+          return clampControlPoint({
             ...cp,
             y: Math.max(0, Math.min(videoHeight, cp.y - liftDelta))
-          }
+          })
         }
         return cp
       })
@@ -243,7 +259,7 @@ export function TraceEditor({
 
     setControlPoints(newControls)
     regenerateFromControlPoints(newControls, newParams.ballSpeed, newParams.hangtime)
-  }, [params, controlPoints, videoWidth, videoHeight, startPos.y, regenerateFromControlPoints])
+  }, [params, controlPoints, videoWidth, videoHeight, startPos.y, regenerateFromControlPoints, clampControlPoint])
 
   const HIT_RADIUS = 40
 
@@ -306,17 +322,21 @@ export function TraceEditor({
     if (!coords) return
 
     const videoCoords = toVideoCoords(coords.x, coords.y)
-    const clampedX = Math.max(0, Math.min(videoWidth, videoCoords.x))
-    const clampedY = Math.max(0, Math.min(videoHeight, videoCoords.y))
+    const nextControlPoint = clampControlPoint({
+      id: selectedControl as ControlPoint['id'],
+      x: videoCoords.x,
+      y: videoCoords.y,
+      label: ''
+    })
 
     setControlPoints(prev => {
       const updated = prev.map(cp =>
-        cp.id === selectedControl ? { ...cp, x: clampedX, y: clampedY } : cp
+        cp.id === selectedControl ? { ...cp, x: nextControlPoint.x, y: nextControlPoint.y } : cp
       )
       regenerateFromControlPoints(updated, params.ballSpeed, params.hangtime)
       return updated
     })
-  }, [isDragging, selectedControl, toVideoCoords, videoWidth, videoHeight, params.ballSpeed, params.hangtime, regenerateFromControlPoints])
+  }, [isDragging, selectedControl, toVideoCoords, params.ballSpeed, params.hangtime, regenerateFromControlPoints, clampControlPoint])
 
   const handleEnd = useCallback(() => {
     setIsDragging(false)
@@ -415,7 +435,8 @@ export function TraceEditor({
       ctx.textAlign = 'center'
       ctx.shadowColor = 'black'
       ctx.shadowBlur = 4
-      ctx.fillText(cp.label, x, y + radius + 20)
+      const labelY = y < radius + 32 ? y + radius + 24 : y + radius + 20
+      ctx.fillText(cp.label, x, labelY)
       ctx.shadowBlur = 0
     })
 

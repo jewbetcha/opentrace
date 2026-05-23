@@ -214,6 +214,7 @@ export default function App() {
             fps={metadata.fps}
             onFrameChange={handleFrameChange}
             showStats={false}
+            showPlaybackControls={false}
           >
             <ManualTracerCreator
               videoWidth={metadata.width}
@@ -274,6 +275,7 @@ export default function App() {
             }}
             showStats={false}
             showFullTracer={true}
+            showPlaybackControls={false}
           >
             <TraceEditor
               points={points}

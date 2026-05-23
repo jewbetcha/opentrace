@@ -106,7 +106,7 @@ export function useVideoExport(): UseVideoExportReturn {
           x: p.x,
           y: p.y
         })),
-        fps: 60,  // Output at 60fps for smooth playback
+        fps: Math.max(24, Math.min(60, Math.round(sourceFps))),
         source_fps: sourceFps,  // FPS the frameIndex values are based on
         width: video.videoWidth,
         height: video.videoHeight,

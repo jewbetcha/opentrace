@@ -2,6 +2,7 @@ import modal
 import subprocess
 import tempfile
 import os
+from PIL import Image, ImageDraw
 
 app = modal.App("opentrace-render")
 
@@ -27,7 +28,6 @@ def render_video(data: dict):
     OPTIMIZED VERSION: Pipes frames directly to FFmpeg to avoid disk I/O.
     """
     import base64
-    from PIL import Image, ImageDraw
     import time
 
     total_start = time.time()
@@ -62,29 +62,24 @@ def render_video(data: dict):
     if source_fps <= 0 or output_fps <= 0:
         return {"error": "FPS values must be greater than zero"}
 
-    fps_scale = output_fps / source_fps
     total_frames = int(duration * output_fps)
     line_width = style.get("lineWidth", 4)
     glow_intensity = style.get("glowIntensity", 10)
     start_color = style.get("startColor", "#FFD700")
     end_color = style.get("endColor", "#FF4500")
+    sorted_points = sorted(points, key=lambda p: p["frameIndex"])
+    tracer_start_time = sorted_points[0]["frameIndex"] / source_fps
+    tracer_end_time = sorted_points[-1]["frameIndex"] / source_fps
+    reveal_duration = max(0.1, tracer_end_time - tracer_start_time)
 
     if total_frames <= 0:
         return {"error": "Video duration must be greater than zero"}
 
-    # Adaptive supersampling
     total_pixels = width * height
-    is_high_res = total_pixels >= 1920 * 1080
-    is_4k = total_pixels >= 3840 * 2160
-
-    if is_4k or total_frames > 600:
-        scale = 1
-    elif is_high_res or total_frames > 300:
-        scale = 2
-    else:
-        scale = 2
+    scale = 1 if total_pixels >= 1280 * 720 else 2
 
     print(f"[RENDER] Resolution: {width}x{height}, scale={scale}x, total_frames={total_frames}")
+    print(f"[RENDER] Tracer window: {tracer_start_time:.2f}s to {tracer_end_time:.2f}s")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write input video
@@ -100,147 +95,54 @@ def render_video(data: dict):
         print(f"[RENDER] Input video ready: {len(video_bytes) / 1024 / 1024:.2f} MB in {time.time() - step_start:.2f}s")
 
         output_path = os.path.join(tmpdir, "output.mp4")
+        overlay_path = os.path.join(tmpdir, "overlay.png")
+        draw_overlay_image(
+            overlay_path,
+            sorted_points,
+            width,
+            height,
+            scale,
+            line_width,
+            glow_intensity,
+            start_color,
+            end_color
+        )
 
-        # Start FFmpeg process with pipe input for overlay frames
-        # This avoids writing thousands of PNG files to disk
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
-            # Input 1: Original video
             "-i", input_path,
-            # Input 2: Raw RGBA frames piped from stdin
-            "-f", "rawvideo",
-            "-pix_fmt", "rgba",
-            "-s", f"{width}x{height}",
-            "-r", str(output_fps),
-            "-i", "pipe:0",
-            # Filter: overlay with alpha blending
-            "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[out]",
+            "-loop", "1",
+            "-framerate", str(output_fps),
+            "-t", str(duration),
+            "-i", overlay_path,
+            "-filter_complex",
+            f"[1:v]format=rgba,fade=t=in:st={tracer_start_time:.6f}:d={reveal_duration:.6f}:alpha=1[ov];[0:v][ov]overlay=0:0:format=auto:shortest=1[out]",
             "-map", "[out]",
             "-map", "0:a:0?",
-            # Output encoding - optimized for speed
             "-c:v", "libx264",
-            "-preset", "ultrafast",  # Fastest encoding
-            "-crf", "20",  # Slightly lower quality for speed (was 18)
-            "-tune", "fastdecode",  # Optimize for fast playback
+            "-preset", "ultrafast",
+            "-crf", "22",
+            "-tune", "fastdecode",
             "-c:a", "aac",
-            "-b:a", "128k",  # Lower audio bitrate
+            "-b:a", "128k",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
-            "-threads", "0",  # Use all CPU cores
+            "-threads", "0",
             "-r", str(output_fps),
             output_path
         ]
 
-        print(f"[RENDER] Starting FFmpeg pipeline...")
+        print(f"[RENDER] Starting FFmpeg overlay render...")
         ffmpeg_start = time.time()
-
-        proc = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        # Generate and pipe frames directly to FFmpeg
-        frame_gen_start = time.time()
-        last_progress_log = 0
-        frames_with_content = 0
-
-        # Pre-create empty frame bytes for reuse
-        empty_frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        empty_frame_bytes = empty_frame.tobytes()
-
-        try:
-            for frame_idx in range(total_frames):
-                # Log progress every 10%
-                progress_pct = int((frame_idx / total_frames) * 100)
-                if progress_pct >= last_progress_log + 10:
-                    elapsed = time.time() - frame_gen_start
-                    fps_rate = frame_idx / elapsed if elapsed > 0 else 0
-                    remaining = (total_frames - frame_idx) / fps_rate if fps_rate > 0 else 0
-                    print(f"[RENDER] Progress: {progress_pct}% ({frame_idx}/{total_frames}) - {fps_rate:.1f} fps, ~{remaining:.1f}s remaining")
-                    last_progress_log = progress_pct
-
-                source_frame_idx = frame_idx / fps_scale
-                visible_points = [p for p in points if p["frameIndex"] <= source_frame_idx]
-
-                if len(visible_points) < 2:
-                    proc.stdin.write(empty_frame_bytes)
-                    continue
-
-                frames_with_content += 1
-
-                img_size = (width * scale, height * scale) if scale > 1 else (width, height)
-                img = Image.new("RGBA", img_size, (0, 0, 0, 0))
-                draw = ImageDraw.Draw(img)
-
-                if glow_intensity > 0:
-                    for layer in range(2, 0, -1):
-                        alpha = int(50 / layer)
-                        glow_width = line_width + glow_intensity * layer * 0.6
-
-                        for i in range(1, len(visible_points)):
-                            p1 = visible_points[i - 1]
-                            p2 = visible_points[i]
-                            t = i / (len(visible_points) - 1)
-                            color = interpolate_color(start_color, end_color, t)
-                            glow_color = color[:3] + (alpha,)
-
-                            draw.line(
-                                [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                                fill=glow_color,
-                                width=max(1, int(glow_width * scale))
-                            )
-
-                for i in range(1, len(visible_points)):
-                    p1 = visible_points[i - 1]
-                    p2 = visible_points[i]
-                    t = i / (len(visible_points) - 1)
-                    color = interpolate_color(start_color, end_color, t)
-                    base_width = line_width * (1 - t * 0.3) * scale
-
-                    draw.line(
-                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                        fill=color[:3] + (150,),
-                        width=max(1, int(base_width * 1.2))
-                    )
-                    draw.line(
-                        [(p1["x"] * scale, p1["y"] * scale), (p2["x"] * scale, p2["y"] * scale)],
-                        fill=color,
-                        width=max(1, int(base_width))
-                    )
-
-                    radius = max(1, int(base_width * 0.4))
-                    draw.ellipse(
-                        [p2["x"] * scale - radius, p2["y"] * scale - radius,
-                         p2["x"] * scale + radius, p2["y"] * scale + radius],
-                        fill=color
-                    )
-
-                if scale > 1:
-                    img = img.resize((width, height), Image.LANCZOS)
-
-                proc.stdin.write(img.tobytes())
-        except BrokenPipeError:
-            print("[RENDER] FFmpeg pipe closed before all frames were written")
-        finally:
-            if proc.stdin:
-                proc.stdin.close()
-                proc.stdin = None
-
-        _, stderr = proc.communicate()
-
-        frame_gen_elapsed = time.time() - frame_gen_start
+        proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         ffmpeg_elapsed = time.time() - ffmpeg_start
 
         if proc.returncode != 0:
             print(f"[RENDER] FFmpeg FAILED")
-            print(f"[RENDER] FFmpeg stderr: {stderr.decode()}")
-            return {"error": stderr.decode()}
+            print(f"[RENDER] FFmpeg stderr: {proc.stderr.decode()}")
+            return {"error": proc.stderr.decode()}
 
-        print(f"[RENDER] Frame generation: {total_frames} frames in {frame_gen_elapsed:.2f}s ({total_frames/frame_gen_elapsed:.1f} fps)")
-        print(f"[RENDER] Frames with tracer: {frames_with_content}/{total_frames}")
         print(f"[RENDER] FFmpeg total time: {ffmpeg_elapsed:.2f}s")
 
         # Read output and return as base64
@@ -264,6 +166,10 @@ def hex_to_rgb(hex_color: str) -> tuple:
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 
+def hex_to_rgba(hex_color: str, alpha: int) -> tuple:
+    return hex_to_rgb(hex_color) + (alpha,)
+
+
 def interpolate_color(color1: str, color2: str, t: float) -> tuple:
     """Interpolate between two hex colors."""
     r1, g1, b1 = hex_to_rgb(color1)
@@ -274,6 +180,91 @@ def interpolate_color(color1: str, color2: str, t: float) -> tuple:
     b = int(b1 + (b2 - b1) * t)
 
     return (r, g, b, 255)
+
+
+def smooth_path(points: list, scale: int) -> list:
+    if len(points) < 3:
+        return [(p["x"] * scale, p["y"] * scale) for p in points]
+
+    smoothed = []
+    samples_per_segment = 4
+
+    for i in range(len(points) - 1):
+        p0 = points[max(0, i - 1)]
+        p1 = points[i]
+        p2 = points[i + 1]
+        p3 = points[min(len(points) - 1, i + 2)]
+
+        for sample in range(samples_per_segment):
+            t = sample / samples_per_segment
+            smoothed.append((
+                catmull_rom(p0["x"], p1["x"], p2["x"], p3["x"], t) * scale,
+                catmull_rom(p0["y"], p1["y"], p2["y"], p3["y"], t) * scale
+            ))
+
+    last = points[-1]
+    smoothed.append((last["x"] * scale, last["y"] * scale))
+    return smoothed
+
+
+def draw_overlay_image(
+    output_path: str,
+    points: list,
+    width: int,
+    height: int,
+    scale: int,
+    line_width: int,
+    glow_intensity: int,
+    start_color: str,
+    end_color: str,
+) -> None:
+    img_size = (width * scale, height * scale) if scale > 1 else (width, height)
+    img = Image.new("RGBA", img_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    scaled_points = smooth_path(points, scale)
+
+    if glow_intensity > 0:
+        for layer in range(2, 0, -1):
+            alpha = int(50 / layer)
+            glow_width = line_width + glow_intensity * layer * 0.6
+            draw.line(
+                scaled_points,
+                fill=hex_to_rgba(start_color, alpha),
+                width=max(1, int(glow_width * scale)),
+                joint="curve"
+            )
+
+    for i in range(1, len(scaled_points)):
+        p1 = scaled_points[i - 1]
+        p2 = scaled_points[i]
+        t = i / (len(scaled_points) - 1)
+        color = interpolate_color(start_color, end_color, t)
+        base_width = line_width * (1 - t * 0.3) * scale
+
+        draw.line([p1, p2], fill=color[:3] + (150,), width=max(1, int(base_width * 1.2)))
+        draw.line([p1, p2], fill=color, width=max(1, int(base_width)))
+
+        radius = max(1, int(base_width * 0.4))
+        draw.ellipse(
+            [p2[0] - radius, p2[1] - radius, p2[0] + radius, p2[1] + radius],
+            fill=color
+        )
+
+    if scale > 1:
+        img = img.resize((width, height), Image.LANCZOS)
+
+    img.save(output_path)
+
+
+def catmull_rom(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
+    t2 = t * t
+    t3 = t2 * t
+    return 0.5 * (
+        (2 * p1)
+        + (-p0 + p2) * t
+        + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+        + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+    )
 
 
 # Local entrypoint for testing

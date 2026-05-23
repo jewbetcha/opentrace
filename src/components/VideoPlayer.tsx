@@ -15,6 +15,7 @@ interface VideoPlayerProps {
   onFrameChange?: (frame: number) => void
   showStats?: boolean
   showFullTracer?: boolean
+  showPlaybackControls?: boolean
   children?: React.ReactNode
 }
 
@@ -31,6 +32,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   onFrameChange,
   showStats = true,
   showFullTracer = false,
+  showPlaybackControls = true,
   children
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -267,14 +269,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
       {/* Editor overlay slot */}
       {children}
 
-      {/* Controls overlay */}
-      <div
-        className={`
-          absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent
-          transition-opacity duration-300 pt-20 pb-6 px-4
-          ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}
-        `}
-      >
+      {showPlaybackControls && (
+        <div
+          className={`
+            absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent
+            transition-opacity duration-300 pt-20 pb-6 px-4
+            ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}
+          `}
+        >
         {/* Timeline scrubber */}
         <div
           className="relative h-12 flex items-center mb-4 touch-none cursor-pointer"
@@ -348,10 +350,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
         <div className="absolute bottom-6 right-4 text-xs text-white/60 font-mono tabular-nums">
           {currentFrame} / {totalFrames}
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Top status bar - only show if showStats is true and has points */}
-      {showStats && points.length > 0 && (
+      {showPlaybackControls && showStats && points.length > 0 && (
         <div
           className={`
             absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent

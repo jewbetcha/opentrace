@@ -1,12 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { TrackPoint } from '../types'
-import {
-  calculateTrackmanControlPoints,
-  evaluateBezier,
-  generateBezierPoints,
-  calculateBezierT,
-  calculateFlightFrames
-} from '../lib/trajectory'
+import { generateGolfFlightPoints } from '../lib/trajectory'
 import {
   TracerSliderGrid,
   ColorPicker,
@@ -71,49 +65,26 @@ export function ManualTracerCreator({
     const hasPoints = pointsSet.start && pointsSet.end
     if (!hasPoints && mode !== 'adjust') return []
 
-    const points: TrackPoint[] = []
     const { startX, startY, endX, endY, peakHeight, curve, ballSpeed, hangtime, impactFrame } = params
-
-    // Calculate control points using shared Trackman function
-    const cp = calculateTrackmanControlPoints({
-      startX, startY, endX, endY,
-      peakHeight, curve, hangtime,
-      videoWidth, videoHeight
-    })
-
-    // Calculate apex Y for physics timing
-    const apexHeight = peakHeight * videoHeight
-    const apexY = Math.min(startY, endY) - apexHeight
-
-    // Calculate physics-based frame counts
-    const { riseFrames, apexFrames, fallFrames, totalFrames: flightTotal } = calculateFlightFrames(
-      startY, apexY, endY, ballSpeed, hangtime, fps
-    )
-
-    const maxFrames = totalFrames - impactFrame - 1
-    const flightFrames = Math.min(flightTotal, maxFrames)
-
-    // Generate trajectory using cubic Bezier with physics timing
-    for (let i = 0; i <= flightFrames; i++) {
-      const frameIndex = impactFrame + i
-      if (frameIndex >= totalFrames) break
-
-      // Get t parameter with physics-based timing
-      const t = Math.min(1, Math.max(0, calculateBezierT(i, riseFrames, apexFrames, fallFrames)))
-
-      // Evaluate Bezier curve at t
-      const point = evaluateBezier(t, cp)
-
-      points.push({
-        frameIndex,
-        x: Math.max(0, Math.min(videoWidth, point.x)),
-        y: Math.max(0, Math.min(videoHeight, point.y)),
-        confidence: 1,
-        isEstimated: false
-      })
-    }
-
-    return points
+    return generateGolfFlightPoints({
+      startX,
+      startY,
+      endX,
+      endY,
+      peakHeight,
+      curve,
+      ballSpeed,
+      hangtime,
+      impactFrame,
+      totalFrames,
+      fps,
+      videoWidth,
+      videoHeight
+    }).map(point => ({
+      ...point,
+      confidence: 1,
+      isEstimated: false
+    }))
   }, [params, videoWidth, videoHeight, pointsSet, mode, totalFrames, fps])
 
   const previewPoints = generateTrajectory()
@@ -148,15 +119,21 @@ export function ManualTracerCreator({
     if (mode === 'adjust') {
       const { startX, startY, endX, endY, peakHeight, curve, hangtime, color } = params
 
-      // Use shared Trackman function for control points
-      const cp = calculateTrackmanControlPoints({
-        startX, startY, endX, endY,
-        peakHeight, curve, hangtime,
-        videoWidth, videoHeight
+      const trajectoryPoints = generateGolfFlightPoints({
+        startX,
+        startY,
+        endX,
+        endY,
+        peakHeight,
+        curve,
+        ballSpeed: params.ballSpeed,
+        hangtime,
+        impactFrame: params.impactFrame,
+        totalFrames,
+        fps,
+        videoWidth,
+        videoHeight
       })
-
-      // Generate trajectory points using shared function
-      const trajectoryPoints = generateBezierPoints(cp, 60)
 
       // Draw trajectory
       if (trajectoryPoints.length > 1) {
@@ -206,7 +183,7 @@ export function ManualTracerCreator({
       ctx.stroke()
     }
 
-  }, [params, containerWidth, containerHeight, videoWidth, videoHeight, mode])
+  }, [params, containerWidth, containerHeight, videoWidth, videoHeight, mode, totalFrames, fps])
 
   const handleCanvasInteraction = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     // Only handle start and end modes
@@ -366,7 +343,7 @@ export function ManualTracerCreator({
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-sm">
           <p className="text-xs text-white/90" style={{ fontFamily: 'Outfit, system-ui, sans-serif' }}>
             {mode === 'start' && 'Tap ball start position'}
-            {mode === 'end' && 'Tap ball landing spot'}
+            {mode === 'end' && 'Tap flight endpoint'}
           </p>
         </div>
       )}

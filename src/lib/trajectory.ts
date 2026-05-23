@@ -11,23 +11,22 @@ export interface BezierControlPoints {
 }
 
 export const TRACKMAN = {
-  APEX_X_RATIO: 0.78,
-  LAUNCH_FACTOR_BASE: 0.42,
-  LAUNCH_FACTOR_HANGTIME: 0.38,
-  DESCENT_X_RATIO: 0.97,
+  APEX_X_RATIO: 0.72,
+  LAUNCH_FACTOR_BASE: 0.34,
+  LAUNCH_FACTOR_HANGTIME: 0.3,
+  DESCENT_X_RATIO: 0.93,
   CURVE_FACTOR_P1: 0.025,
   CURVE_FACTOR_P2: 0.055,
 
-  T_RISE_END: 0.58,
-  T_APEX_END: 0.86,
-
   MIN_FLIGHT_SECONDS: 0.5,
-  MAX_FLIGHT_SECONDS: 3.2,
-  BASE_FLIGHT_SECONDS: 0.75,
-  HEIGHT_SECONDS: 1.05,
-  HANGTIME_SECONDS: 0.45,
+  MAX_FLIGHT_SECONDS: 2.8,
+  BASE_FLIGHT_SECONDS: 0.55,
+  HEIGHT_SECONDS: 0.9,
+  HANGTIME_SECONDS: 0.35,
   MIN_BALL_SPEED: 0.45,
-  MAX_BALL_SPEED: 2.4
+  MAX_BALL_SPEED: 2.4,
+  SAMPLES_PER_FRAME: 3,
+  VIDEO_EDGE_MARGIN: 0.035
 }
 
 export interface TrackmanParams {
@@ -46,7 +45,7 @@ export function calculateTrackmanControlPoints(params: TrackmanParams): BezierCo
   const { startX, startY, endX, endY, peakHeight, curve, hangtime, videoWidth, videoHeight } = params
 
   const dx = endX - startX
-  const apexHeight = peakHeight * videoHeight
+  const apexHeight = getVisibleApexHeight(startY, endY, peakHeight, videoHeight)
   const apexY = Math.min(startY, endY) - apexHeight
   const apexX = startX + dx * TRACKMAN.APEX_X_RATIO
 
@@ -95,22 +94,9 @@ export function calculateBezierT(
   apexFrames: number,
   fallFrames: number
 ): number {
-  const { T_RISE_END, T_APEX_END } = TRACKMAN
-  const apexStartFrame = riseFrames
-  const fallStartFrame = riseFrames + apexFrames
-
-  if (frameIndex <= apexStartFrame) {
-    const progress = frameIndex / Math.max(1, riseFrames)
-    return easeOutCubic(progress) * T_RISE_END
-  }
-
-  if (frameIndex <= fallStartFrame) {
-    const progress = (frameIndex - apexStartFrame) / Math.max(1, apexFrames)
-    return lerp(T_RISE_END, T_APEX_END, smoothstep(progress))
-  }
-
-  const progress = (frameIndex - fallStartFrame) / Math.max(1, fallFrames)
-  return lerp(T_APEX_END, 1, easeInCubic(progress))
+  const totalFrames = Math.max(1, riseFrames + apexFrames + fallFrames)
+  const progress = clamp(frameIndex / totalFrames, 0, 1)
+  return dragProgress(progress)
 }
 
 export function calculateFlightFrames(
@@ -133,14 +119,77 @@ export function calculateFlightFrames(
     TRACKMAN.MAX_FLIGHT_SECONDS
   )
 
-  const totalFrames = Math.max(6, Math.round(flightSeconds * Math.max(1, fps)))
-  const apexFrameShare = clamp(0.04 + hang * 0.09, 0.04, 0.13)
-  const riseFrameShare = clamp(0.62 + hang * 0.08 - Math.max(0, fall - rise) / 4000, 0.55, 0.72)
+  const totalFrames = Math.max(8, Math.round(flightSeconds * Math.max(1, fps)))
+  const apexFrameShare = clamp(0.03 + hang * 0.06, 0.03, 0.09)
+  const riseFrameShare = clamp(0.58 + hang * 0.08 - Math.max(0, fall - rise) / 5000, 0.54, 0.68)
   const apexFrames = Math.max(1, Math.round(totalFrames * apexFrameShare))
   const riseFrames = Math.max(2, Math.round(totalFrames * riseFrameShare))
   const fallFrames = Math.max(2, totalFrames - riseFrames - apexFrames)
 
   return { riseFrames, apexFrames, fallFrames, totalFrames: riseFrames + apexFrames + fallFrames }
+}
+
+export interface GolfFlightParams extends TrackmanParams {
+  ballSpeed: number
+  impactFrame: number
+  totalFrames: number
+  fps: number
+}
+
+export interface FlightPoint extends Point2D {
+  frameIndex: number
+}
+
+export function generateGolfFlightPoints(params: GolfFlightParams): FlightPoint[] {
+  const {
+    startX,
+    startY,
+    endX,
+    endY,
+    peakHeight,
+    curve,
+    ballSpeed,
+    hangtime,
+    impactFrame,
+    totalFrames,
+    fps,
+    videoWidth,
+    videoHeight
+  } = params
+
+  const apexHeight = getVisibleApexHeight(startY, endY, peakHeight, videoHeight)
+  const apexY = Math.min(startY, endY) - apexHeight
+  const timing = calculateFlightFrames(startY, apexY, endY, ballSpeed, hangtime, fps)
+  const flightFrames = Math.min(timing.totalFrames, totalFrames - impactFrame - 1)
+  const sampleCount = Math.max(1, Math.round(flightFrames * TRACKMAN.SAMPLES_PER_FRAME))
+  const points: FlightPoint[] = []
+  const curveAmplitude = curve * videoWidth * 0.1
+  const apexProgress = clamp(TRACKMAN.APEX_X_RATIO + hangtime * 0.06, 0.66, 0.8)
+
+  for (let i = 0; i <= sampleCount; i++) {
+    const frameOffset = i / TRACKMAN.SAMPLES_PER_FRAME
+    const frameIndex = impactFrame + frameOffset
+    if (frameIndex >= totalFrames) break
+
+    const timeProgress = i / sampleCount
+    const carryProgress = dragProgress(timeProgress)
+    const lift = asymmetricArc(carryProgress, apexProgress)
+    const curveOffset = curveAmplitude * Math.sin(Math.PI * carryProgress)
+
+    points.push({
+      frameIndex,
+      x: clamp(lerp(startX, endX, carryProgress) + curveOffset, 0, videoWidth),
+      y: clamp(lerp(startY, endY, carryProgress) - apexHeight * lift, 0, videoHeight)
+    })
+  }
+
+  return points
+}
+
+export function getVisibleApexHeight(startY: number, endY: number, peakHeight: number, videoHeight: number): number {
+  const margin = videoHeight * TRACKMAN.VIDEO_EDGE_MARGIN
+  const maxApexHeight = Math.max(12, Math.min(startY, endY) - margin)
+  return clamp(peakHeight * videoHeight, 8, maxApexHeight)
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -156,12 +205,19 @@ function smoothstep(progress: number): number {
   return t * t * (3 - 2 * t)
 }
 
-function easeOutCubic(progress: number): number {
-  const t = 1 - clamp(progress, 0, 1)
-  return 1 - t * t * t
+function dragProgress(progress: number): number {
+  const t = clamp(progress, 0, 1)
+  const drag = 1.05
+  return (1 - Math.exp(-drag * t)) / (1 - Math.exp(-drag))
 }
 
-function easeInCubic(progress: number): number {
+function asymmetricArc(progress: number, apexProgress: number): number {
   const t = clamp(progress, 0, 1)
-  return t * t * t
+
+  if (t <= apexProgress) {
+    return smoothstep(t / apexProgress)
+  }
+
+  const fallProgress = (t - apexProgress) / Math.max(0.01, 1 - apexProgress)
+  return 1 - fallProgress * fallProgress * (3 - 2 * fallProgress)
 }
